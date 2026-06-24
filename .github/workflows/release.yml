@@ -63,6 +63,15 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Read release notes
+        id: notes
+        run: |
+          {
+            echo 'body<<EOF'
+            cat .github/RELEASE_NOTES.md
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build the app (Tauri)
         uses: tauri-apps/tauri-action@v0
         env:
@@ -70,7 +79,7 @@ jobs:
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'app-build' }}
           releaseName: "PDF Studio ${{ github.ref_name }}"
-          releaseBody: "Download the installer for your platform from the assets below."
-          releaseDraft: true
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
