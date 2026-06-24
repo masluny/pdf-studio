@@ -1,0 +1,208 @@
+@import "tailwindcss";
+
+/* ============================ design tokens ============================ */
+:root {
+  --canvas: #e9ebef;
+  --surface: #ffffff;
+  --sunken: #eef0f4;
+  --sidebar: #f5f6f8;
+  --header: #ffffff;
+  --border: #e4e6eb;
+  --border-strong: #d2d6dd;
+  --text: #1b1e24;
+  --text-2: #5a616c;
+  --text-muted: #969da8;
+  --accent: #3b6ff6;
+  --accent-hover: #2f62e6;
+  --accent-soft: rgba(59, 111, 246, 0.12);
+  --hover: rgba(17, 24, 39, 0.06);
+  --on-accent: #ffffff;
+  --shadow: rgba(20, 24, 33, 0.22);
+  --scroll: #c8cdd6;
+}
+[data-theme="dark"] {
+  --canvas: #161719;
+  --surface: #212327;
+  --sunken: #2a2d32;
+  --sidebar: #1b1d20;
+  --header: #1f2125;
+  --border: #34373d;
+  --border-strong: #42464d;
+  --text: #eceef1;
+  --text-2: #a2a9b4;
+  --text-muted: #6e757f;
+  --accent: #5b82f7;
+  --accent-hover: #6e91f8;
+  --accent-soft: rgba(91, 130, 247, 0.2);
+  --hover: rgba(255, 255, 255, 0.06);
+  --on-accent: #ffffff;
+  --shadow: rgba(0, 0, 0, 0.5);
+  --scroll: #3f434a;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--canvas);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* ============================ layout ============================ */
+.app-grid { display: grid; grid-template-rows: auto 1fr auto; height: 100%; }
+.body-grid { display: grid; grid-template-columns: 312px 1fr; min-height: 0; }
+
+.header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 10px;
+  background: var(--header);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: nowrap;
+}
+.sidebar {
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.statusbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 12px; font-size: 12px; color: var(--text-2);
+  background: var(--surface); border-top: 1px solid var(--border);
+}
+
+/* ============================ controls ============================ */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; min-width: 32px; padding: 0 7px;
+  border: none; border-radius: 8px; background: transparent;
+  color: var(--text-2); cursor: pointer; transition: background .12s, color .12s;
+}
+.btn:hover { background: var(--hover); }
+.btn:active { background: var(--border); }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn svg { width: 19px; height: 19px; }
+
+.btn-primary {
+  background: var(--accent); color: var(--on-accent);
+  font-weight: 600; padding: 0 13px; border-radius: 9px;
+}
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-primary svg { width: 17px; height: 17px; }
+
+.divider { width: 1px; height: 24px; background: var(--border); margin: 0 5px; flex: none; }
+
+.segment {
+  display: flex; gap: 2px; padding: 3px;
+  background: var(--sunken); border: 1px solid var(--border); border-radius: 10px;
+}
+.seg-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 28px; width: 30px; border: none; border-radius: 7px;
+  background: transparent; color: var(--text-2); cursor: pointer;
+}
+.seg-btn:hover { background: var(--hover); }
+.seg-btn.active { background: var(--accent); color: var(--on-accent); }
+.seg-btn svg { width: 18px; height: 18px; }
+
+.pill { font-size: 12px; font-weight: 600; color: var(--text-2); padding: 0 4px; white-space: nowrap; }
+
+.field {
+  height: 30px; padding: 0 8px; border-radius: 8px;
+  background: var(--sunken); border: 1px solid var(--border); color: var(--text);
+  font-size: 12px;
+}
+.field:focus { outline: none; border-color: var(--accent); }
+
+.swatch { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--border-strong); cursor: pointer; }
+
+/* ============================ sidebar tabs ============================ */
+.tabbar { display: flex; border-bottom: 1px solid var(--border); }
+.tab {
+  flex: 1; padding: 9px 4px; text-align: center; font-size: 12px; font-weight: 600;
+  color: var(--text-muted); border: none; background: transparent; cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.tab:hover { color: var(--text-2); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-panel { flex: 1; min-height: 0; overflow: auto; display: none; }
+.tab-panel.active { display: flex; flex-direction: column; }
+
+.section-label { font-size: 11px; font-weight: 700; color: var(--text-muted); padding: 12px 14px 6px; }
+
+.pageops { display: flex; gap: 1px; padding: 6px 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.pageops .btn { height: 30px; min-width: 30px; }
+.pageops .btn svg { width: 17px; height: 17px; }
+
+.thumbs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px; overflow: auto; }
+.thumb { cursor: pointer; border-radius: 8px; padding: 5px; }
+.thumb.active { background: var(--accent-soft); }
+.thumb canvas, .thumb .thumb-ph {
+  width: 100%; border-radius: 5px; border: 1px solid var(--border);
+  box-shadow: 0 1px 4px var(--shadow); display: block; background: #fff;
+}
+.thumb .num { text-align: center; font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+/* lists (outline, comments) */
+.list { padding: 6px; }
+.list-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 9px; border-radius: 8px; cursor: pointer; color: var(--text);
+}
+.list-item:hover { background: var(--hover); }
+.list-item.sel { background: var(--accent-soft); }
+.list-item.resolved { color: var(--text-muted); }
+.dot { width: 11px; height: 11px; border-radius: 50%; flex: none; border: 1px solid var(--border-strong); }
+.tree-item { padding-left: 0; }
+
+.notes-area {
+  flex: 1; margin: 12px; padding: 10px; resize: none;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  color: var(--text); font-size: 13px; line-height: 1.5; font-family: inherit;
+}
+.notes-area:focus { outline: none; border-color: var(--accent); }
+
+.cbtn-row { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--border); }
+.ghost-sm {
+  flex: 1; padding: 7px; border: none; border-radius: 7px; background: var(--hover);
+  color: var(--text-2); font-weight: 600; cursor: pointer; font-size: 12px;
+}
+.ghost-sm:hover { background: var(--border); }
+
+/* ============================ find bar ============================ */
+.findbar {
+  display: none; align-items: center; gap: 8px;
+  padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.findbar.show { display: flex; }
+
+/* ============================ pdf canvas area ============================ */
+.viewer { position: relative; overflow: auto; background: var(--canvas); min-height: 0; }
+.page-wrap { position: relative; margin: 28px auto; width: max-content; }
+.page-shadow { box-shadow: 0 10px 34px var(--shadow); border-radius: 2px; }
+.pdf-canvas { display: block; background: #fff; border-radius: 2px; }
+.overlay { position: absolute; inset: 0; }
+
+/* annotation overlay svg helpers */
+.ov-handle { cursor: pointer; }
+.ann-selected { outline: none; }
+
+/* menus / popovers */
+.popover {
+  position: absolute; z-index: 50; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 10px; padding: 6px;
+  box-shadow: 0 8px 30px var(--shadow);
+}
+.swatch-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.swatch-cell { width: 24px; height: 24px; border-radius: 6px; cursor: pointer; border: 1px solid var(--border-strong); }
+.menu-item { padding: 7px 12px; border-radius: 7px; cursor: pointer; white-space: nowrap; color: var(--text); }
+.menu-item:hover { background: var(--accent-soft); }
+
+/* scrollbars */
+*::-webkit-scrollbar { width: 11px; height: 11px; }
+*::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+.hidden { display: none !important; }
