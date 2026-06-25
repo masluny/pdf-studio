@@ -240,6 +240,41 @@ mod tests {
         std::fs::read("../public/sample.pdf").expect("sample.pdf")
     }
 
+    /// End-to-end proof: open a PDF, edit a heading, SAVE to disk, reopen the
+    /// saved file, and render it to a PNG so the edit is visible.
+    #[test]
+    fn edit_proof() {
+        let pdfium = bind(Path::new(".")).expect("bind pdfium");
+        let src = if std::path::Path::new("/tmp/edit_test.pdf").exists() {
+            "/tmp/edit_test.pdf"
+        } else {
+            "../public/sample.pdf"
+        };
+        let bytes = std::fs::read(src).expect("read source");
+
+        let objs = list_objects(&pdfium, &bytes, 0).unwrap();
+        let intro = objs
+            .iter()
+            .find(|o| o.text.as_deref().map(|t| t.contains("Introduction")).unwrap_or(false))
+            .expect("Introduction heading");
+
+        // edit + save to disk (mirrors what edit_set_text + edit_save do)
+        let edited = set_text(&pdfium, &bytes, 0, intro.id, "EDITED BY PDF STUDIO").unwrap();
+        std::fs::write("/tmp/edit_test_out.pdf", &edited).unwrap();
+
+        // reopen the SAVED file from disk, verify + render
+        let disk = std::fs::read("/tmp/edit_test_out.pdf").unwrap();
+        let changed = list_objects(&pdfium, &disk, 0)
+            .unwrap()
+            .iter()
+            .any(|o| o.text.as_deref().map(|t| t.contains("EDITED BY PDF STUDIO")).unwrap_or(false));
+        assert!(changed, "saved file does not contain the edit");
+
+        let png = render_page_png(&pdfium, &disk, 0, 1.6).unwrap();
+        std::fs::write("/tmp/edit_proof.png", &png).unwrap();
+        eprintln!("EDIT PROOF: wrote /tmp/edit_test_out.pdf and /tmp/edit_proof.png");
+    }
+
     #[test]
     fn pdfium_edit_roundtrip() {
         let pdfium = bind(Path::new(".")).expect("bind pdfium");
