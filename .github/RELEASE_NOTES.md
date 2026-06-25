@@ -1,10 +1,23 @@
-# PDF Studio v0.2.0
+# PDF Studio v0.3.0
 
 A professional, native **PDF editor & viewer** for Windows, macOS and Linux —
 built with [Tauri 2](https://tauri.app), Rust, TypeScript and Tailwind v4.
 
 > Lightweight, fast and private: all editing happens locally on your machine.
 > No uploads, no accounts, no telemetry.
+
+---
+
+## 🆕 New in v0.3.0 — real content editing
+
+A **View / Edit** toggle in the toolbar:
+
+- **View** — read, annotate/mark, search, outline, comments & notes.
+- **Edit** — change the PDF's **own content** (powered by PDFium):
+  - **Click text to retype it**, **move / resize / delete** any object,
+    **add text**, and **replace images** — then **Save** a real edited PDF.
+  - Full **undo / redo** for edits (`⌘Z` / `⌘⇧Z`).
+- **Open with** — launch the app with a PDF path / file association.
 
 ---
 
@@ -41,12 +54,12 @@ Pick the installer for your platform from the **Assets** below.
 
 | Platform | File |
 |----------|------|
-| **Windows** (x64) | `PDF.Studio_0.2.0_x64-setup.exe` or `..._x64_en-US.msi` |
-| **macOS** (Apple Silicon) | `PDF.Studio_0.2.0_aarch64.dmg` |
-| **macOS** (Intel) | `PDF.Studio_0.2.0_x64.dmg` |
-| **Linux** (Debian/Ubuntu) | `PDF.Studio_0.2.0_amd64.deb` |
-| **Linux** (Fedora/RHEL) | `PDF.Studio-0.2.0-1.x86_64.rpm` |
-| **Linux** (portable) | `PDF.Studio_0.2.0_amd64.AppImage` |
+| **Windows** (x64) | `PDF.Studio_0.3.0_x64-setup.exe` or `..._x64_en-US.msi` |
+| **macOS** (Apple Silicon) | `PDF.Studio_0.3.0_aarch64.dmg` |
+| **macOS** (Intel) | `PDF.Studio_0.3.0_x64.dmg` |
+| **Linux** (Debian/Ubuntu) | `PDF.Studio_0.3.0_amd64.deb` |
+| **Linux** (Fedora/RHEL) | `PDF.Studio-0.3.0-1.x86_64.rpm` |
+| **Linux** (portable) | `PDF.Studio_0.3.0_amd64.AppImage` |
 
 ### Install notes
 - **macOS**: on first launch you may need to right-click → *Open* (the app is

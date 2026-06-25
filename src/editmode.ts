@@ -193,9 +193,12 @@ function attachPointer() {
       }
     }
   });
-  overlay.addEventListener("dblclick", async () => {
-    const o = selectedObject();
+  overlay.addEventListener("dblclick", async (e) => {
+    const [x, y] = toPoint(e as unknown as PointerEvent);
+    const o = hit(x, y);
     if (o && o.kind === "text") {
+      selected = o.id;
+      drawObjects();
       const t = window.prompt("Edit text:", o.text ?? "");
       if (t !== null && t !== o.text) {
         try {
@@ -223,6 +226,24 @@ async function addText(x: number, y: number) {
   }
   editTool = "select";
   emit("mode");
+}
+
+export async function undoEdit() {
+  try {
+    if (await be.editUndo()) { await renderEditPage(); status("Undo"); }
+    else status("Nothing to undo");
+  } catch (e) { status("Undo failed: " + e); }
+}
+
+export async function redoEdit() {
+  try {
+    if (await be.editRedo()) { await renderEditPage(); status("Redo"); }
+    else status("Nothing to redo");
+  } catch (e) { status("Redo failed: " + e); }
+}
+
+export function deselect() {
+  if (selected !== null) { selected = null; drawObjects(); emit("mode"); }
 }
 
 export async function deleteSelected() {

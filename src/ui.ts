@@ -17,7 +17,9 @@ import * as edit from "./editor";
 import {
   initEditMode, enterEdit, leaveEdit, setEditTool, editText,
   deleteSelected as editDeleteSelected, saveEdited, isDirty, selectedObject,
+  undoEdit, redoEdit, deselect as editDeselect,
 } from "./editmode";
+import { startupFile } from "./backend";
 
 const TOOLS: [Tool, string, string, string][] = [
   ["select", "select", "Select / move", "V"],
@@ -151,8 +153,10 @@ function buildHeader(): HTMLElement {
   editSeg.append(
     eb(icon("select"), "Select / move (drag, Delete to remove)", () => { setEditTool("select"); status("Select tool"); }),
     eb(icon("text"), "Add text — click on the page", () => { setEditTool("text"); status("Click on the page to add text"); }),
-    eb("Edit text", "Edit selected text object", () => editText()),
+    eb("Edit text", "Edit selected text object (or double-click)", () => editText()),
     eb(icon("trash"), "Delete selected object", () => editDeleteSelected()),
+    eb("↶", "Undo  ·  ⌘Z", () => undoEdit()),
+    eb("↷", "Redo  ·  ⌘⇧Z", () => redoEdit()),
   );
   bar.appendChild(editSeg);
   editInfoEl = h("span", "pill edit-only hidden", "");
@@ -606,8 +610,15 @@ function wireShortcuts() {
     else if (meta && e.key === "s") { e.preventDefault(); saveNow(); status("Saved"); }
     else if (meta && e.key === "e") { e.preventDefault(); exportPdf(); }
     else if (meta && e.key === "f") { e.preventDefault(); toggleFind(); }
-    else if (meta && e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); redo(); renderOverlay(); }
-    else if (meta && e.key === "z") { e.preventDefault(); undo(); renderOverlay(); }
+    else if (meta && e.shiftKey && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      if (app.mode === "edit") redoEdit(); else { redo(); renderOverlay(); }
+    }
+    else if (meta && e.key === "z") {
+      e.preventDefault();
+      if (app.mode === "edit") undoEdit(); else { undo(); renderOverlay(); }
+    }
+    else if (e.key === "Escape" && app.mode === "edit") { editDeselect(); }
     else if (meta && e.key === "l") { e.preventDefault(); toggleTheme(); }
     else if (meta && (e.key === "=" || e.key === "+")) { e.preventDefault(); zoomIn(); }
     else if (meta && e.key === "-") { e.preventDefault(); zoomOut(); }

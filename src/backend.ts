@@ -120,3 +120,9 @@ export const editInsertText = (page: number, x: number, y: number, text: string,
 export const editReplaceImage = (page: number, id: number, imageB64: string) =>
   invoke("edit_replace_image", { page, id, imageB64 });
 export const editSave = (path: string) => invoke("edit_save", { path });
+export const editUndo = () => invoke<boolean>("edit_undo");
+export const editRedo = () => invoke<boolean>("edit_redo");
+export const startupFile = async (): Promise<string | null> => {
+  if (!isTauri()) return null;
+  try { return (await invoke<string | null>("startup_file")) ?? null; } catch { return null; }
+};

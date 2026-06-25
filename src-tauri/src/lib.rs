@@ -12,9 +12,14 @@ use tauri::Manager;
 
 mod pdf_edit;
 
-/// Current in-memory PDF bytes for Edit mode (the editable source of truth).
+/// Current in-memory PDF bytes for Edit mode (the editable source of truth),
+/// plus undo/redo history of byte snapshots.
 #[derive(Default)]
-struct EditState(Mutex<Vec<u8>>);
+struct EditState {
+    bytes: Mutex<Vec<u8>>,
+    undo: Mutex<Vec<Vec<u8>>>,
+    redo: Mutex<Vec<Vec<u8>>>,
+}
 
 /// Sidecar path next to a PDF: `foo.pdf` -> `foo.annot.json`.
 fn sidecar_path(pdf_path: &str) -> PathBuf {
@@ -115,7 +120,9 @@ fn pdfium(app: &tauri::AppHandle) -> Result<pdfium_render::prelude::Pdfium, Stri
 fn edit_open(app: tauri::AppHandle, state: tauri::State<EditState>, path: String) -> Result<usize, String> {
     let bytes = fs::read(&path).map_err(|e| format!("read {path}: {e}"))?;
     let count = pdf_edit::page_count(&pdfium(&app)?, &bytes)?;
-    *state.0.lock().unwrap() = bytes;
+    *state.bytes.lock().unwrap() = bytes;
+    state.undo.lock().unwrap().clear();
+    state.redo.lock().unwrap().clear();
     Ok(count as usize)
 }
 
@@ -125,7 +132,7 @@ fn edit_objects(
     state: tauri::State<EditState>,
     page: u16,
 ) -> Result<Vec<pdf_edit::ObjInfo>, String> {
-    let bytes = state.0.lock().unwrap().clone();
+    let bytes = state.bytes.lock().unwrap().clone();
     pdf_edit::list_objects(&pdfium(&app)?, &bytes, page)
 }
 
@@ -136,7 +143,7 @@ fn edit_render_page(
     page: u16,
     scale: f32,
 ) -> Result<String, String> {
-    let bytes = state.0.lock().unwrap().clone();
+    let bytes = state.bytes.lock().unwrap().clone();
     let png = pdf_edit::render_page_png(&pdfium(&app)?, &bytes, page, scale)?;
     Ok(STANDARD.encode(png))
 }
@@ -146,8 +153,54 @@ fn apply(
     new_bytes: Result<Vec<u8>, String>,
 ) -> Result<(), String> {
     let b = new_bytes?;
-    *state.0.lock().unwrap() = b;
+    // Snapshot the pre-edit state for undo (cap history to keep memory bounded).
+    let prev = state.bytes.lock().unwrap().clone();
+    {
+        let mut undo = state.undo.lock().unwrap();
+        undo.push(prev);
+        if undo.len() > 40 {
+            undo.remove(0);
+        }
+    }
+    state.redo.lock().unwrap().clear();
+    *state.bytes.lock().unwrap() = b;
     Ok(())
+}
+
+#[tauri::command]
+fn edit_undo(state: tauri::State<EditState>) -> Result<bool, String> {
+    let prev = state.undo.lock().unwrap().pop();
+    match prev {
+        Some(p) => {
+            let cur = state.bytes.lock().unwrap().clone();
+            state.redo.lock().unwrap().push(cur);
+            *state.bytes.lock().unwrap() = p;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+#[tauri::command]
+fn edit_redo(state: tauri::State<EditState>) -> Result<bool, String> {
+    let next = state.redo.lock().unwrap().pop();
+    match next {
+        Some(n) => {
+            let cur = state.bytes.lock().unwrap().clone();
+            state.undo.lock().unwrap().push(cur);
+            *state.bytes.lock().unwrap() = n;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+/// First `.pdf` path passed on the command line (for "Open with" / CLI use).
+#[tauri::command]
+fn startup_file() -> Option<String> {
+    std::env::args().skip(1).find(|a| {
+        a.to_lowercase().ends_with(".pdf") && Path::new(a).exists()
+    })
 }
 
 #[tauri::command]
@@ -158,7 +211,7 @@ fn edit_set_text(
     id: u32,
     text: String,
 ) -> Result<(), String> {
-    let bytes = state.0.lock().unwrap().clone();
+    let bytes = state.bytes.lock().unwrap().clone();
     apply(&state, pdf_edit::set_text(&pdfium(&app)?, &bytes, page, id, &text))
 }
 
@@ -171,7 +224,7 @@ fn edit_move(
     dx: f32,
     dy: f32,
 ) -> Result<(), String> {
-    let bytes = state.0.lock().unwrap().clone();
+    let bytes = state.bytes.lock().unwrap().clone();
     apply(&state, pdf_edit::move_object(&pdfium(&app)?, &bytes, page, id, dx, dy))
 }
 
@@ -183,7 +236,7 @@ fn edit_set_bbox(
     id: u32,
     bbox: [f32; 4],
 ) -> Result<(), String> {
-    let bytes = state.0.lock().unwrap().clone();
+    let bytes = state.bytes.lock().unwrap().clone();
     apply(&state, pdf_edit::set_bbox(&pdfium(&app)?, &bytes, page, id, bbox))
 }
 
@@ -194,7 +247,7 @@ fn edit_delete(
     page: u16,
     id: u32,
 ) -> Result<(), String> {
-    let bytes = state.0.lock().unwrap().clone();
+    let bytes = state.bytes.lock().unwrap().clone();
     apply(&state, pdf_edit::delete_object(&pdfium(&app)?, &bytes, page, id))
 }
 
@@ -208,7 +261,7 @@ fn edit_insert_text(
     text: String,
     size: f32,
 ) -> Result<(), String> {
-    let bytes = state.0.lock().unwrap().clone();
+    let bytes = state.bytes.lock().unwrap().clone();
     apply(&state, pdf_edit::insert_text(&pdfium(&app)?, &bytes, page, x, y, &text, size))
 }
 
@@ -221,13 +274,13 @@ fn edit_replace_image(
     image_b64: String,
 ) -> Result<(), String> {
     let img = STANDARD.decode(image_b64.as_bytes()).map_err(|e| e.to_string())?;
-    let bytes = state.0.lock().unwrap().clone();
+    let bytes = state.bytes.lock().unwrap().clone();
     apply(&state, pdf_edit::replace_image(&pdfium(&app)?, &bytes, page, id, &img))
 }
 
 #[tauri::command]
 fn edit_save(state: tauri::State<EditState>, path: String) -> Result<(), String> {
-    let bytes = state.0.lock().unwrap().clone();
+    let bytes = state.bytes.lock().unwrap().clone();
     fs::write(&path, bytes).map_err(|e| format!("write {path}: {e}"))
 }
 
@@ -252,6 +305,9 @@ pub fn run() {
             edit_insert_text,
             edit_replace_image,
             edit_save,
+            edit_undo,
+            edit_redo,
+            startup_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PDF Studio");
