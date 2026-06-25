@@ -31,6 +31,7 @@ export const ICONS: Record<string, string> = {
   plus: S(`<line x1="12" y1="5.5" x2="12" y2="18.5"/><line x1="5.5" y1="12" x2="18.5" y2="12"/>`),
   merge: S(`<rect x="3.5" y="4" width="8" height="11" rx="1.5" stroke-width="1.7"/><rect x="12.5" y="9" width="8" height="11" rx="1.5" stroke-width="1.7"/>`),
   search: S(`<circle cx="10.5" cy="10.5" r="5.6"/><line x1="14.8" y1="14.8" x2="20" y2="20"/>`),
+  sidebar: S(`<rect x="3.5" y="5" width="17" height="14" rx="2"/><line x1="9" y1="5" x2="9" y2="19"/>`),
   sun: S(`<circle cx="12" cy="12" r="3.4"/><g stroke-width="1.8"><line x1="12" y1="2.5" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="21.5"/><line x1="2.5" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="21.5" y2="12"/><line x1="5.2" y1="5.2" x2="7" y2="7"/><line x1="17" y1="17" x2="18.8" y2="18.8"/><line x1="18.8" y1="5.2" x2="17" y2="7"/><line x1="7" y1="17" x2="5.2" y2="18.8"/></g>`),
   moon: S(`<path d="M20 14.5 A8 8 0 1 1 9.5 4 A6.2 6.2 0 0 0 20 14.5 Z" fill="currentColor" stroke="none"/>`),
   extract: S(`<path d="M14 3 H7 a2 2 0 0 0 -2 2 V19 a2 2 0 0 0 2 2 H17 a2 2 0 0 0 2 -2 V8 Z" stroke-width="1.7"/><polyline points="14,3 14,8 19,8" stroke-width="1.7"/>`),

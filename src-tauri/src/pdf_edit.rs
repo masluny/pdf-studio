@@ -66,16 +66,19 @@ pub fn list_objects(pdfium: &Pdfium, bytes: &[u8], page_index: u16) -> Result<Ve
     Ok(out)
 }
 
+/// Render a page to PNG. Returns (png_bytes, page_width_pts, page_height_pts).
 pub fn render_page_png(
     pdfium: &Pdfium,
     bytes: &[u8],
     page_index: u16,
     scale: f32,
-) -> Result<Vec<u8>, String> {
+) -> Result<(Vec<u8>, f32, f32), String> {
     let doc = pdfium.load_pdf_from_byte_slice(bytes, None).map_err(e2s)?;
     let page = doc.pages().get(page_index as i32).map_err(e2s)?;
-    let width = (page.width().value * scale).round() as Pixels;
-    let height = (page.height().value * scale).round() as Pixels;
+    let w_pts = page.width().value;
+    let h_pts = page.height().value;
+    let width = (w_pts * scale).round() as Pixels;
+    let height = (h_pts * scale).round() as Pixels;
     let config = PdfRenderConfig::new()
         .set_target_width(width)
         .set_maximum_height(height);
@@ -85,7 +88,7 @@ pub fn render_page_png(
     image
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .map_err(e2s)?;
-    Ok(png)
+    Ok((png, w_pts, h_pts))
 }
 
 pub fn set_text(
@@ -270,7 +273,7 @@ mod tests {
             .any(|o| o.text.as_deref().map(|t| t.contains("EDITED BY PDF STUDIO")).unwrap_or(false));
         assert!(changed, "saved file does not contain the edit");
 
-        let png = render_page_png(&pdfium, &disk, 0, 1.6).unwrap();
+        let (png, _w, _h) = render_page_png(&pdfium, &disk, 0, 1.6).unwrap();
         std::fs::write("/tmp/edit_proof.png", &png).unwrap();
         eprintln!("EDIT PROOF: wrote /tmp/edit_test_out.pdf and /tmp/edit_proof.png");
     }
@@ -327,7 +330,7 @@ mod tests {
         eprintln!("RESIZE OK");
 
         // Render produces a non-trivial PNG.
-        let png = render_page_png(&pdfium, &bytes, 0, 1.5).unwrap();
+        let (png, _w, _h) = render_page_png(&pdfium, &bytes, 0, 1.5).unwrap();
         assert!(png.len() > 1000, "render produced too little data");
     }
 }

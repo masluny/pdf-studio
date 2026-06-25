@@ -55,6 +55,7 @@ export async function enterEdit(): Promise<boolean> {
     await be.editOpen(app.pdfPath);
   } catch (e) {
     status("Could not open for editing: " + e);
+    window.alert("Could not open for editing:\n" + e);
     return false;
   }
   dirty = false;
@@ -62,7 +63,7 @@ export async function enterEdit(): Promise<boolean> {
   setVisible(false);
   editWrap.style.display = "block";
   await renderEditPage();
-  status("Edit mode — click text to retype, drag to move, Delete to remove");
+  status("Edit mode — double-click text to retype, drag to move, Delete to remove");
   return true;
 }
 
@@ -74,20 +75,17 @@ export function leaveEdit() {
 }
 
 async function renderEditPage() {
-  if (!app.pdfDoc) return;
   const scale = app.scale;
-  let b64: string;
+  let res: be.RenderResult;
   try {
-    b64 = await be.editRenderPage(app.page, scale);
+    res = await be.editRenderPage(app.page, scale);
   } catch (e) {
     status("Render failed: " + e);
+    window.alert("Could not render for editing:\n" + e);
     return;
   }
-  img.src = "data:image/png;base64," + b64;
-
-  const page = await app.pdfDoc.getPage(app.page + 1);
-  const vp1 = page.getViewport({ scale: 1 });
-  pageW = vp1.width; pageH = vp1.height;
+  img.src = "data:image/png;base64," + res.png;
+  pageW = res.width; pageH = res.height;
   const dispW = pageW * scale, dispH = pageH * scale;
   img.style.width = `${dispW}px`; img.style.height = `${dispH}px`;
   editWrap.style.width = `${dispW}px`; editWrap.style.height = `${dispH}px`;
@@ -116,10 +114,13 @@ function drawObjects() {
     r.setAttribute("height", `${Math.max(1, y1 - y0)}`);
     r.setAttribute("fill", "transparent");
     const isSel = o.id === selected;
-    const stroke = isSel ? "var(--accent)" : o.kind === "image" ? "#18b96b" : "#9aa1ac";
+    const stroke = isSel ? "var(--accent)"
+      : o.kind === "image" ? "#18b96b"
+      : o.kind === "text" ? "#5b82f7" : "#9aa1ac";
     r.setAttribute("stroke", stroke);
-    r.setAttribute("stroke-width", isSel ? "1.4" : "0.7");
-    if (!isSel) r.setAttribute("stroke-dasharray", "3 3");
+    r.setAttribute("stroke-width", isSel ? "1.6" : "1");
+    r.setAttribute("stroke-opacity", isSel ? "1" : "0.55");
+    if (!isSel) r.setAttribute("stroke-dasharray", "4 3");
     r.setAttribute("data-id", `${o.id}`);
     r.style.cursor = editTool === "select" ? "move" : "crosshair";
     overlay.appendChild(r);

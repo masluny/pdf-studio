@@ -32,9 +32,41 @@ export function mountViewer(container: HTMLElement) {
   viewerEl.appendChild(pageWrap);
   ctx = canvas.getContext("2d")!;
   attachPointer();
+  attachWheel();
 
   on("annotations", renderOverlay);
   on("search", renderOverlay);
+}
+
+let _lastFlip = 0;
+function attachWheel() {
+  viewerEl.addEventListener(
+    "wheel",
+    (e) => {
+      // Trackpad pinch (and ctrl+wheel) -> zoom.
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        setZoom(app.scale * Math.exp(-e.deltaY * 0.01));
+        return;
+      }
+      // Two-finger scroll past a page edge -> flip pages.
+      const el = viewerEl;
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
+      const atTop = el.scrollTop <= 2;
+      const now = Date.now();
+      if (now - _lastFlip < 450) return;
+      if (e.deltaY > 8 && atBottom && app.page < app.pageCount - 1) {
+        _lastFlip = now;
+        gotoPage(app.page + 1);
+        el.scrollTop = 0;
+      } else if (e.deltaY < -8 && atTop && app.page > 0) {
+        _lastFlip = now;
+        gotoPage(app.page - 1);
+        el.scrollTop = 0;
+      }
+    },
+    { passive: false }
+  );
 }
 
 export async function loadPdfBytes(bytes: Uint8Array) {

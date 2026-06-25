@@ -96,11 +96,17 @@ fn pdf_info(path: String) -> Result<PdfInfo, String> {
 fn pdfium_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(d) = app.path().resource_dir() {
-        candidates.push(d);
+        candidates.push(d.clone());
+        candidates.push(d.join("_up_"));
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(p) = exe.parent() {
             candidates.push(p.to_path_buf());
+            // macOS bundle: Contents/MacOS/<bin> -> Contents/Resources, Contents/Frameworks
+            if let Some(contents) = p.parent() {
+                candidates.push(contents.join("Resources"));
+                candidates.push(contents.join("Frameworks"));
+            }
         }
     }
     candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
@@ -109,21 +115,48 @@ fn pdfium_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
             return Ok(d.clone());
         }
     }
-    Err("PDFium library not found (bundle libpdfium next to the app)".to_string())
+    let tried: Vec<String> = candidates.iter().map(|p| p.display().to_string()).collect();
+    Err(format!("PDFium library not found. Looked in: {}", tried.join("; ")))
 }
 
-fn pdfium(app: &tauri::AppHandle) -> Result<pdfium_render::prelude::Pdfium, String> {
-    pdf_edit::bind(&pdfium_dir(app)?)
+/// PDFium can only be initialized once per process, so bind it once and share
+/// it (the `thread_safe` feature serializes access across command threads).
+fn pdfium(app: &tauri::AppHandle) -> Result<&'static pdfium_render::prelude::Pdfium, String> {
+    use std::sync::OnceLock;
+    static PDFIUM: OnceLock<pdfium_render::prelude::Pdfium> = OnceLock::new();
+    if let Some(p) = PDFIUM.get() {
+        return Ok(p);
+    }
+    let bound = pdf_edit::bind(&pdfium_dir(app)?)?;
+    let _ = PDFIUM.set(bound);
+    PDFIUM.get().ok_or_else(|| "pdfium initialization race".to_string())
 }
 
 #[tauri::command]
 fn edit_open(app: tauri::AppHandle, state: tauri::State<EditState>, path: String) -> Result<usize, String> {
     let bytes = fs::read(&path).map_err(|e| format!("read {path}: {e}"))?;
-    let count = pdf_edit::page_count(&pdfium(&app)?, &bytes)?;
+    let pd = pdfium(&app).map_err(|e| {
+        eprintln!("[pdf-studio] edit_open: PDFium load failed: {e}");
+        e
+    })?;
+    let count = pdf_edit::page_count(pd, &bytes)?;
+    eprintln!("[pdf-studio] edit_open ok: {count} pages");
     *state.bytes.lock().unwrap() = bytes;
     state.undo.lock().unwrap().clear();
     state.redo.lock().unwrap().clear();
     Ok(count as usize)
+}
+
+/// Was the app launched with `--edit` (auto-enter Edit mode; for diagnostics).
+#[tauri::command]
+fn startup_autoedit() -> bool {
+    std::env::args().any(|a| a == "--edit")
+}
+
+/// Frontend diagnostic log -> stderr.
+#[tauri::command]
+fn dbg_log(msg: String) {
+    eprintln!("[js] {msg}");
 }
 
 #[tauri::command]
@@ -133,7 +166,19 @@ fn edit_objects(
     page: u16,
 ) -> Result<Vec<pdf_edit::ObjInfo>, String> {
     let bytes = state.bytes.lock().unwrap().clone();
-    pdf_edit::list_objects(&pdfium(&app)?, &bytes, page)
+    let r = pdf_edit::list_objects(pdfium(&app)?, &bytes, page);
+    match &r {
+        Ok(v) => eprintln!("[pdf-studio] edit_objects page {page}: {} objects", v.len()),
+        Err(e) => eprintln!("[pdf-studio] edit_objects error: {e}"),
+    }
+    r
+}
+
+#[derive(Serialize)]
+struct RenderResult {
+    png: String,
+    width: f32,
+    height: f32,
 }
 
 #[tauri::command]
@@ -142,10 +187,18 @@ fn edit_render_page(
     state: tauri::State<EditState>,
     page: u16,
     scale: f32,
-) -> Result<String, String> {
+) -> Result<RenderResult, String> {
     let bytes = state.bytes.lock().unwrap().clone();
-    let png = pdf_edit::render_page_png(&pdfium(&app)?, &bytes, page, scale)?;
-    Ok(STANDARD.encode(png))
+    match pdf_edit::render_page_png(pdfium(&app)?, &bytes, page, scale) {
+        Ok((png, width, height)) => {
+            eprintln!("[pdf-studio] edit_render_page page {page}: {} bytes ({width}x{height}pt)", png.len());
+            Ok(RenderResult { png: STANDARD.encode(png), width, height })
+        }
+        Err(e) => {
+            eprintln!("[pdf-studio] edit_render_page error: {e}");
+            Err(e)
+        }
+    }
 }
 
 fn apply(
@@ -212,7 +265,7 @@ fn edit_set_text(
     text: String,
 ) -> Result<(), String> {
     let bytes = state.bytes.lock().unwrap().clone();
-    apply(&state, pdf_edit::set_text(&pdfium(&app)?, &bytes, page, id, &text))
+    apply(&state, pdf_edit::set_text(pdfium(&app)?, &bytes, page, id, &text))
 }
 
 #[tauri::command]
@@ -225,7 +278,7 @@ fn edit_move(
     dy: f32,
 ) -> Result<(), String> {
     let bytes = state.bytes.lock().unwrap().clone();
-    apply(&state, pdf_edit::move_object(&pdfium(&app)?, &bytes, page, id, dx, dy))
+    apply(&state, pdf_edit::move_object(pdfium(&app)?, &bytes, page, id, dx, dy))
 }
 
 #[tauri::command]
@@ -237,7 +290,7 @@ fn edit_set_bbox(
     bbox: [f32; 4],
 ) -> Result<(), String> {
     let bytes = state.bytes.lock().unwrap().clone();
-    apply(&state, pdf_edit::set_bbox(&pdfium(&app)?, &bytes, page, id, bbox))
+    apply(&state, pdf_edit::set_bbox(pdfium(&app)?, &bytes, page, id, bbox))
 }
 
 #[tauri::command]
@@ -248,7 +301,7 @@ fn edit_delete(
     id: u32,
 ) -> Result<(), String> {
     let bytes = state.bytes.lock().unwrap().clone();
-    apply(&state, pdf_edit::delete_object(&pdfium(&app)?, &bytes, page, id))
+    apply(&state, pdf_edit::delete_object(pdfium(&app)?, &bytes, page, id))
 }
 
 #[tauri::command]
@@ -262,7 +315,7 @@ fn edit_insert_text(
     size: f32,
 ) -> Result<(), String> {
     let bytes = state.bytes.lock().unwrap().clone();
-    apply(&state, pdf_edit::insert_text(&pdfium(&app)?, &bytes, page, x, y, &text, size))
+    apply(&state, pdf_edit::insert_text(pdfium(&app)?, &bytes, page, x, y, &text, size))
 }
 
 #[tauri::command]
@@ -275,7 +328,7 @@ fn edit_replace_image(
 ) -> Result<(), String> {
     let img = STANDARD.decode(image_b64.as_bytes()).map_err(|e| e.to_string())?;
     let bytes = state.bytes.lock().unwrap().clone();
-    apply(&state, pdf_edit::replace_image(&pdfium(&app)?, &bytes, page, id, &img))
+    apply(&state, pdf_edit::replace_image(pdfium(&app)?, &bytes, page, id, &img))
 }
 
 #[tauri::command]
@@ -308,6 +361,8 @@ pub fn run() {
             edit_undo,
             edit_redo,
             startup_file,
+            startup_autoedit,
+            dbg_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PDF Studio");

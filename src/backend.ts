@@ -106,8 +106,9 @@ export interface EditObject {
 
 export const editOpen = (path: string) => invoke<number>("edit_open", { path });
 export const editObjects = (page: number) => invoke<EditObject[]>("edit_objects", { page });
+export interface RenderResult { png: string; width: number; height: number; }
 export const editRenderPage = (page: number, scale: number) =>
-  invoke<string>("edit_render_page", { page, scale });
+  invoke<RenderResult>("edit_render_page", { page, scale });
 export const editSetText = (page: number, id: number, text: string) =>
   invoke("edit_set_text", { page, id, text });
 export const editMove = (page: number, id: number, dx: number, dy: number) =>
@@ -125,4 +126,13 @@ export const editRedo = () => invoke<boolean>("edit_redo");
 export const startupFile = async (): Promise<string | null> => {
   if (!isTauri()) return null;
   try { return (await invoke<string | null>("startup_file")) ?? null; } catch { return null; }
+};
+export const startupAutoedit = async (): Promise<boolean> => {
+  if (!isTauri()) return false;
+  try { return !!(await invoke<boolean>("startup_autoedit")); } catch { return false; }
+};
+export const dbgLog = (msg: string) => {
+  if (isTauri()) invoke("dbg_log", { msg }).catch(() => {});
+  // eslint-disable-next-line no-console
+  console.log("[dbg]", msg);
 };

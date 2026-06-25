@@ -53,7 +53,12 @@ body {
 
 /* ============================ layout ============================ */
 .app-grid { display: grid; grid-template-rows: auto 1fr auto; height: 100%; }
-.body-grid { display: grid; grid-template-columns: 312px 1fr; min-height: 0; }
+.body-grid { display: grid; grid-template-columns: 312px 1fr; min-height: 0; transition: grid-template-columns .15s ease; }
+.body-grid.sidebar-hidden { grid-template-columns: 0 1fr; }
+.body-grid.sidebar-hidden .sidebar { display: none; }
+
+/* editable-object overlay affordances */
+.overlay rect[data-id]:hover { fill: rgba(79, 140, 255, 0.12); cursor: pointer; }
 
 .header {
   display: flex; align-items: center; gap: 6px;

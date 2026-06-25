@@ -104,6 +104,7 @@ export function buildUI() {
 function buildHeader(): HTMLElement {
   const bar = h("div", "header");
 
+  bar.appendChild(iconBtn("sidebar", "Hide / show sidebar  ·  ⌘B", toggleSidebar));
   bar.appendChild(iconBtn("open", "Open PDF  ·  ⌘O", openPdf));
   const save = iconBtn("save", "Save annotations  ·  ⌘S", () => { saveNow(); status("Annotations saved"); });
   bar.appendChild(save); docControls.push(save);
@@ -453,6 +454,8 @@ function setTool(tool: Tool) {
   status(`${KIND_LABELS[tool] ?? "Select"} tool`);
 }
 
+export function enterEditMode() { return setMode("edit"); }
+
 async function setMode(m: "view" | "edit") {
   if (m === app.mode) return;
   if (!app.pdfPath) { status("Open a PDF first"); return; }
@@ -493,6 +496,10 @@ function openColorMenu() {
   setTimeout(() => document.addEventListener("pointerdown", function close(ev) {
     if (!pop.contains(ev.target as Node)) { pop.remove(); document.removeEventListener("pointerdown", close); }
   }), 0);
+}
+
+function toggleSidebar() {
+  document.querySelector(".body-grid")?.classList.toggle("sidebar-hidden");
 }
 
 function toggleTheme() {
@@ -620,6 +627,7 @@ function wireShortcuts() {
     }
     else if (e.key === "Escape" && app.mode === "edit") { editDeselect(); }
     else if (meta && e.key === "l") { e.preventDefault(); toggleTheme(); }
+    else if (meta && e.key === "b") { e.preventDefault(); toggleSidebar(); }
     else if (meta && (e.key === "=" || e.key === "+")) { e.preventDefault(); zoomIn(); }
     else if (meta && e.key === "-") { e.preventDefault(); zoomOut(); }
     else if (meta && e.key === "0") { e.preventDefault(); fitWidth(); }
