@@ -93,3 +93,30 @@ export async function pdfInfo(path: string): Promise<{ page_count: number } | nu
   }
   return null;
 }
+
+// ---- PDFium content-editing commands (Edit mode; Tauri only) --------------
+export interface EditObject {
+  id: number;
+  kind: "text" | "image" | "path" | "other";
+  bbox: [number, number, number, number];
+  text?: string | null;
+  font_size?: number | null;
+  color?: string | null;
+}
+
+export const editOpen = (path: string) => invoke<number>("edit_open", { path });
+export const editObjects = (page: number) => invoke<EditObject[]>("edit_objects", { page });
+export const editRenderPage = (page: number, scale: number) =>
+  invoke<string>("edit_render_page", { page, scale });
+export const editSetText = (page: number, id: number, text: string) =>
+  invoke("edit_set_text", { page, id, text });
+export const editMove = (page: number, id: number, dx: number, dy: number) =>
+  invoke("edit_move", { page, id, dx, dy });
+export const editSetBbox = (page: number, id: number, bbox: [number, number, number, number]) =>
+  invoke("edit_set_bbox", { page, id, bbox });
+export const editDelete = (page: number, id: number) => invoke("edit_delete", { page, id });
+export const editInsertText = (page: number, x: number, y: number, text: string, size: number) =>
+  invoke("edit_insert_text", { page, x, y, text, size });
+export const editReplaceImage = (page: number, id: number, imageB64: string) =>
+  invoke("edit_replace_image", { page, id, imageB64 });
+export const editSave = (path: string) => invoke("edit_save", { path });

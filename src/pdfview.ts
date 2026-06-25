@@ -329,6 +329,11 @@ function attachPointer() {
   });
 }
 
+export function setVisible(v: boolean) {
+  if (pageWrap) pageWrap.style.display = v ? "block" : "none";
+}
+export function viewerElement(): HTMLElement { return viewerEl; }
+
 export function previewLayer(): SVGSVGElement { return overlay; }
 export function makeSvg(name: string, attrs: Record<string, string | number>) { return el(name, attrs); }
 export function pagePoints(): [number, number] { return [pageW, pageH]; }

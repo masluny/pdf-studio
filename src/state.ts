@@ -38,6 +38,7 @@ export const PRESET_COLORS = [
 ];
 
 interface AppState {
+  mode: "view" | "edit";
   pdfPath: string | null;
   pdfBytes: Uint8Array | null;
   pdfDoc: any | null;
@@ -59,6 +60,7 @@ interface AppState {
 }
 
 export const app: AppState = {
+  mode: "view",
   pdfPath: null, pdfBytes: null, pdfDoc: null, pageCount: 0, page: 0, scale: 1.2,
   tool: "select", color: "#ffe14d", width: 2, redactMode: "whiteout",
   theme: (matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"),
@@ -71,7 +73,7 @@ export function uid(): string {
 }
 
 // ---- tiny event bus -------------------------------------------------------
-export type Evt = "doc" | "page" | "annotations" | "tool" | "theme" | "search" | "status";
+export type Evt = "doc" | "page" | "annotations" | "tool" | "theme" | "search" | "status" | "mode";
 const listeners: Record<string, Set<(p?: any) => void>> = {};
 export function on(evt: Evt, cb: (p?: any) => void) {
   (listeners[evt] ??= new Set()).add(cb);

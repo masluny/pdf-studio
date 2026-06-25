@@ -11,9 +11,13 @@ import {
 } from "./pdfview";
 import { initTools, deleteSelected } from "./tools";
 import {
-  openPdfDialog, savePdfDialog, readFile, writeFile, loadSidecar,
+  openPdfDialog, savePdfDialog, readFile, writeFile, loadSidecar, isTauri,
 } from "./backend";
 import * as edit from "./editor";
+import {
+  initEditMode, enterEdit, leaveEdit, setEditTool, editText,
+  deleteSelected as editDeleteSelected, saveEdited, isDirty, selectedObject,
+} from "./editmode";
 
 const TOOLS: [Tool, string, string, string][] = [
   ["select", "select", "Select / move", "V"],
@@ -61,6 +65,8 @@ let findBar!: HTMLElement;
 let findInput!: HTMLInputElement;
 let findCount!: HTMLElement;
 let docControls: HTMLElement[] = [];
+let editInfoEl!: HTMLElement;
+const modeBtns: { view?: HTMLElement; edit?: HTMLElement } = {};
 
 export function buildUI() {
   const root = document.getElementById("app")!;
@@ -83,6 +89,7 @@ export function buildUI() {
   root.appendChild(grid);
 
   mountViewer(viewer);
+  initEditMode(viewer);
   initTools();
   setTool("select");
   setEnabled(false);
@@ -107,8 +114,23 @@ function buildHeader(): HTMLElement {
 
   bar.appendChild(h("div", "divider"));
 
-  // tool segment
-  const seg = h("div", "segment");
+  // View / Edit mode toggle
+  const modeSeg = h("div", "segment");
+  const mkMode = (label: string, title: string, fn: () => void) => {
+    const b = h("button", "seg-btn", label);
+    b.style.width = "auto"; b.style.padding = "0 12px"; b.style.fontWeight = "600";
+    b.title = title; b.onclick = fn;
+    return b;
+  };
+  modeBtns.view = mkMode("View", "View & annotate", () => setMode("view"));
+  modeBtns.view.classList.add("active");
+  modeBtns.edit = mkMode("Edit", "Edit PDF content (text, images, objects)", () => setMode("edit"));
+  modeSeg.append(modeBtns.view, modeBtns.edit);
+  bar.appendChild(modeSeg); docControls.push(modeSeg);
+  bar.appendChild(h("div", "divider"));
+
+  // annotation tool segment (View mode)
+  const seg = h("div", "segment view-only");
   for (const [tool, ic, label, key] of TOOLS) {
     const b = h("button", "seg-btn", icon(ic));
     b.title = `${label}  ·  ${key}`;
@@ -118,13 +140,35 @@ function buildHeader(): HTMLElement {
   }
   bar.appendChild(seg);
 
-  // colour + width
-  swatchEl = h("div", "swatch");
+  // edit toolbar (Edit mode)
+  const editSeg = h("div", "segment edit-only hidden");
+  const eb = (inner: string, title: string, fn: () => void) => {
+    const b = h("button", "seg-btn", inner);
+    if (!inner.startsWith("<")) { b.style.width = "auto"; b.style.padding = "0 9px"; b.style.fontWeight = "600"; }
+    b.title = title; b.onclick = fn;
+    return b;
+  };
+  editSeg.append(
+    eb(icon("select"), "Select / move (drag, Delete to remove)", () => { setEditTool("select"); status("Select tool"); }),
+    eb(icon("text"), "Add text — click on the page", () => { setEditTool("text"); status("Click on the page to add text"); }),
+    eb("Edit text", "Edit selected text object", () => editText()),
+    eb(icon("trash"), "Delete selected object", () => editDeleteSelected()),
+  );
+  bar.appendChild(editSeg);
+  editInfoEl = h("span", "pill edit-only hidden", "");
+  bar.appendChild(editInfoEl);
+  const saveEditBtn = h("button", "btn-primary edit-only hidden", icon("save") + "<span>Save PDF</span>") as HTMLButtonElement;
+  saveEditBtn.style.marginLeft = "2px"; saveEditBtn.title = "Save the edited PDF";
+  saveEditBtn.onclick = () => saveEdited();
+  bar.appendChild(saveEditBtn);
+
+  // colour + width (View mode)
+  swatchEl = h("div", "swatch view-only");
   swatchEl.title = "Annotation colour";
   swatchEl.onclick = openColorMenu;
   bar.appendChild(swatchEl); docControls.push(swatchEl);
 
-  widthInput = h("input", "field") as HTMLInputElement;
+  widthInput = h("input", "field view-only") as HTMLInputElement;
   widthInput.type = "number"; widthInput.min = "0.5"; widthInput.max = "20"; widthInput.step = "0.5";
   widthInput.value = "2"; widthInput.style.width = "56px"; widthInput.title = "Stroke width";
   widthInput.oninput = () => { app.width = parseFloat(widthInput.value) || 2; };
@@ -285,8 +329,18 @@ async function openPdf() {
   const path = await openPdfDialog();
   if (path) await openPath(path);
 }
+function forceViewMode() {
+  if (app.mode === "edit") leaveEdit();
+  app.mode = "view";
+  modeBtns.view?.classList.add("active");
+  modeBtns.edit?.classList.remove("active");
+  document.querySelectorAll(".view-only").forEach((e) => e.classList.remove("hidden"));
+  document.querySelectorAll(".edit-only").forEach((e) => e.classList.add("hidden"));
+}
+
 export async function openPath(path: string) {
   try {
+    forceViewMode();
     await saveNow();
     app.pdfPath = path;
     const bytes = await readFile(path);
@@ -393,6 +447,25 @@ function setTool(tool: Tool) {
   if (DEFAULT_COLORS[tool]) { app.color = DEFAULT_COLORS[tool]; updateSwatch(); }
   renderOverlay();
   status(`${KIND_LABELS[tool] ?? "Select"} tool`);
+}
+
+async function setMode(m: "view" | "edit") {
+  if (m === app.mode) return;
+  if (!app.pdfPath) { status("Open a PDF first"); return; }
+  if (m === "edit") {
+    if (!isTauri()) { status("Editing requires the desktop app (PDFium engine)"); return; }
+    const ok = await enterEdit();
+    if (!ok) return;
+  } else {
+    if (isDirty() && !window.confirm("Discard unsaved content edits?")) return;
+    leaveEdit();
+  }
+  app.mode = m;
+  modeBtns.view?.classList.toggle("active", m === "view");
+  modeBtns.edit?.classList.toggle("active", m === "edit");
+  document.querySelectorAll(".view-only").forEach((e) => e.classList.toggle("hidden", m === "edit"));
+  document.querySelectorAll(".edit-only").forEach((e) => e.classList.toggle("hidden", m !== "edit"));
+  emit("mode");
 }
 function updateSwatch() { swatchEl.style.background = app.color; }
 
@@ -515,6 +588,13 @@ function wireEvents() {
     const last = btns[btns.length - 1] as HTMLElement;
     if (last) last.innerHTML = icon(app.theme === "dark" ? "sun" : "moon");
   });
+  on("mode", () => {
+    if (app.mode !== "edit") { editInfoEl.textContent = ""; return; }
+    const o = selectedObject();
+    editInfoEl.textContent = o
+      ? (o.kind === "text" ? `text · ${Math.round(o.font_size || 0)}pt` : o.kind)
+      : "no selection";
+  });
 }
 
 function wireShortcuts() {
@@ -532,8 +612,11 @@ function wireShortcuts() {
     else if (meta && (e.key === "=" || e.key === "+")) { e.preventDefault(); zoomIn(); }
     else if (meta && e.key === "-") { e.preventDefault(); zoomOut(); }
     else if (meta && e.key === "0") { e.preventDefault(); fitWidth(); }
-    else if (!typing && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); deleteSelected(); }
-    else if (!typing && !meta && app.pdfDoc) {
+    else if (!typing && (e.key === "Delete" || e.key === "Backspace")) {
+      e.preventDefault();
+      if (app.mode === "edit") editDeleteSelected(); else deleteSelected();
+    }
+    else if (!typing && !meta && app.mode === "view" && app.pdfDoc) {
       const t = TOOLS.find(([, , , k]) => k.toLowerCase() === e.key.toLowerCase());
       if (t) setTool(t[0]);
     }

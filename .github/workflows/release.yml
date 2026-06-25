@@ -63,6 +63,30 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Fetch PDFium library (unix)
+        if: runner.os != 'Windows'
+        run: |
+          set -e
+          case "${{ matrix.platform }}|${{ matrix.target }}" in
+            "macos-latest|aarch64-apple-darwin") A=pdfium-mac-arm64; L=lib/libpdfium.dylib; D=libpdfium.dylib ;;
+            "macos-latest|x86_64-apple-darwin")  A=pdfium-mac-x64;   L=lib/libpdfium.dylib; D=libpdfium.dylib ;;
+            "ubuntu-22.04|")                     A=pdfium-linux-x64; L=lib/libpdfium.so;    D=libpdfium.so ;;
+            *) echo "unknown target"; exit 1 ;;
+          esac
+          curl -sL -o pdfium.tgz "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/$A.tgz"
+          tar xzf pdfium.tgz -C . "$L"
+          cp "$L" "src-tauri/$D"
+          ls -la "src-tauri/$D"
+
+      - name: Fetch PDFium library (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.tgz" -OutFile pdfium.tgz
+          tar xzf pdfium.tgz -C . bin/pdfium.dll
+          Copy-Item bin/pdfium.dll src-tauri/pdfium.dll
+          Get-Item src-tauri/pdfium.dll
+
       - name: Read release notes
         id: notes
         run: |

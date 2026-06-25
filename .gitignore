@@ -4,3 +4,11 @@ src-tauri/target/
 src-tauri/gen/
 *.log
 .DS_Store
+
+# PDFium native library (fetched per-platform in CI / dev)
+src-tauri/libpdfium.dylib
+src-tauri/libpdfium.so
+src-tauri/pdfium.dll
+pdfium.tgz
+lib/
+bin/

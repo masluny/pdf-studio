@@ -7,6 +7,14 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use tauri::Manager;
+
+mod pdf_edit;
+
+/// Current in-memory PDF bytes for Edit mode (the editable source of truth).
+#[derive(Default)]
+struct EditState(Mutex<Vec<u8>>);
 
 /// Sidecar path next to a PDF: `foo.pdf` -> `foo.annot.json`.
 fn sidecar_path(pdf_path: &str) -> PathBuf {
@@ -78,16 +86,172 @@ fn pdf_info(path: String) -> Result<PdfInfo, String> {
     })
 }
 
+// ----------------------------------------------------------- PDFium edit mode
+/// Locate the directory containing the PDFium dynamic library.
+fn pdfium_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(d) = app.path().resource_dir() {
+        candidates.push(d);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(p) = exe.parent() {
+            candidates.push(p.to_path_buf());
+        }
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    for d in &candidates {
+        if pdf_edit::platform_lib_path(d).exists() {
+            return Ok(d.clone());
+        }
+    }
+    Err("PDFium library not found (bundle libpdfium next to the app)".to_string())
+}
+
+fn pdfium(app: &tauri::AppHandle) -> Result<pdfium_render::prelude::Pdfium, String> {
+    pdf_edit::bind(&pdfium_dir(app)?)
+}
+
+#[tauri::command]
+fn edit_open(app: tauri::AppHandle, state: tauri::State<EditState>, path: String) -> Result<usize, String> {
+    let bytes = fs::read(&path).map_err(|e| format!("read {path}: {e}"))?;
+    let count = pdf_edit::page_count(&pdfium(&app)?, &bytes)?;
+    *state.0.lock().unwrap() = bytes;
+    Ok(count as usize)
+}
+
+#[tauri::command]
+fn edit_objects(
+    app: tauri::AppHandle,
+    state: tauri::State<EditState>,
+    page: u16,
+) -> Result<Vec<pdf_edit::ObjInfo>, String> {
+    let bytes = state.0.lock().unwrap().clone();
+    pdf_edit::list_objects(&pdfium(&app)?, &bytes, page)
+}
+
+#[tauri::command]
+fn edit_render_page(
+    app: tauri::AppHandle,
+    state: tauri::State<EditState>,
+    page: u16,
+    scale: f32,
+) -> Result<String, String> {
+    let bytes = state.0.lock().unwrap().clone();
+    let png = pdf_edit::render_page_png(&pdfium(&app)?, &bytes, page, scale)?;
+    Ok(STANDARD.encode(png))
+}
+
+fn apply(
+    state: &tauri::State<EditState>,
+    new_bytes: Result<Vec<u8>, String>,
+) -> Result<(), String> {
+    let b = new_bytes?;
+    *state.0.lock().unwrap() = b;
+    Ok(())
+}
+
+#[tauri::command]
+fn edit_set_text(
+    app: tauri::AppHandle,
+    state: tauri::State<EditState>,
+    page: u16,
+    id: u32,
+    text: String,
+) -> Result<(), String> {
+    let bytes = state.0.lock().unwrap().clone();
+    apply(&state, pdf_edit::set_text(&pdfium(&app)?, &bytes, page, id, &text))
+}
+
+#[tauri::command]
+fn edit_move(
+    app: tauri::AppHandle,
+    state: tauri::State<EditState>,
+    page: u16,
+    id: u32,
+    dx: f32,
+    dy: f32,
+) -> Result<(), String> {
+    let bytes = state.0.lock().unwrap().clone();
+    apply(&state, pdf_edit::move_object(&pdfium(&app)?, &bytes, page, id, dx, dy))
+}
+
+#[tauri::command]
+fn edit_set_bbox(
+    app: tauri::AppHandle,
+    state: tauri::State<EditState>,
+    page: u16,
+    id: u32,
+    bbox: [f32; 4],
+) -> Result<(), String> {
+    let bytes = state.0.lock().unwrap().clone();
+    apply(&state, pdf_edit::set_bbox(&pdfium(&app)?, &bytes, page, id, bbox))
+}
+
+#[tauri::command]
+fn edit_delete(
+    app: tauri::AppHandle,
+    state: tauri::State<EditState>,
+    page: u16,
+    id: u32,
+) -> Result<(), String> {
+    let bytes = state.0.lock().unwrap().clone();
+    apply(&state, pdf_edit::delete_object(&pdfium(&app)?, &bytes, page, id))
+}
+
+#[tauri::command]
+fn edit_insert_text(
+    app: tauri::AppHandle,
+    state: tauri::State<EditState>,
+    page: u16,
+    x: f32,
+    y: f32,
+    text: String,
+    size: f32,
+) -> Result<(), String> {
+    let bytes = state.0.lock().unwrap().clone();
+    apply(&state, pdf_edit::insert_text(&pdfium(&app)?, &bytes, page, x, y, &text, size))
+}
+
+#[tauri::command]
+fn edit_replace_image(
+    app: tauri::AppHandle,
+    state: tauri::State<EditState>,
+    page: u16,
+    id: u32,
+    image_b64: String,
+) -> Result<(), String> {
+    let img = STANDARD.decode(image_b64.as_bytes()).map_err(|e| e.to_string())?;
+    let bytes = state.0.lock().unwrap().clone();
+    apply(&state, pdf_edit::replace_image(&pdfium(&app)?, &bytes, page, id, &img))
+}
+
+#[tauri::command]
+fn edit_save(state: tauri::State<EditState>, path: String) -> Result<(), String> {
+    let bytes = state.0.lock().unwrap().clone();
+    fs::write(&path, bytes).map_err(|e| format!("write {path}: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(EditState::default())
         .invoke_handler(tauri::generate_handler![
             read_file_b64,
             write_file_b64,
             load_sidecar,
             save_sidecar,
             pdf_info,
+            edit_open,
+            edit_objects,
+            edit_render_page,
+            edit_set_text,
+            edit_move,
+            edit_set_bbox,
+            edit_delete,
+            edit_insert_text,
+            edit_replace_image,
+            edit_save,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PDF Studio");

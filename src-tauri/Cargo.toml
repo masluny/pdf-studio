@@ -1,6 +1,6 @@
 [package]
 name = "pdf-studio"
-version = "0.2.0"
+version = "0.3.0"
 description = "Professional PDF editor & viewer"
 authors = ["Kacper"]
 edition = "2021"
@@ -19,6 +19,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 lopdf = "0.34"
+image = "0.25"
+pdfium-render = "0.9.2"
 
 [profile.release]
 opt-level = "s"
