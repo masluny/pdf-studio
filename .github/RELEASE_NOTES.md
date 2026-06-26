@@ -1,4 +1,4 @@
-# PDF Studio v0.3.6
+# PDF Studio v0.3.9
 
 A professional, native **PDF editor & viewer** for Windows, macOS and Linux —
 built with [Tauri 2](https://tauri.app), Rust, TypeScript and Tailwind v4.
@@ -8,7 +8,7 @@ built with [Tauri 2](https://tauri.app), Rust, TypeScript and Tailwind v4.
 
 ---
 
-## 🆕 New in v0.3.6 — updated app icon
+## 🆕 New in v0.3.9 — sharper Windows iconndows icon
 
 - Updated app icon: a glossy **green** two-blob mark on a dark squircle, applied
   across the macOS/Windows/Linux bundles, the installer and the in-app logo.
@@ -59,12 +59,12 @@ Pick the installer for your platform from the **Assets** below.
 
 | Platform | File |
 |----------|------|
-| **Windows** (x64) | `PDF.Studio_0.3.6_x64-setup.exe` or `..._x64_en-US.msi` |
-| **macOS** (Apple Silicon) | `PDF.Studio_0.3.6_aarch64.dmg` |
-| **macOS** (Intel) | `PDF.Studio_0.3.6_x64.dmg` |
-| **Linux** (Debian/Ubuntu) | `PDF.Studio_0.3.6_amd64.deb` |
-| **Linux** (Fedora/RHEL) | `PDF.Studio-0.3.6-1.x86_64.rpm` |
-| **Linux** (portable) | `PDF.Studio_0.3.6_amd64.AppImage` |
+| **Windows** (x64) | `PDF.Studio_0.3.9_x64-setup.exe` or `..._x64_en-US.msi` |
+| **macOS** (Apple Silicon) | `PDF.Studio_0.3.9_aarch64.dmg` |
+| **macOS** (Intel) | `PDF.Studio_0.3.9_x64.dmg` |
+| **Linux** (Debian/Ubuntu) | `PDF.Studio_0.3.9_amd64.deb` |
+| **Linux** (Fedora/RHEL) | `PDF.Studio-0.3.9-1.x86_64.rpm` |
+| **Linux** (portable) | `PDF.Studio_0.3.9_amd64.AppImage` |
 
 ### Install notes
 - **macOS**: on first launch you may need to right-click → *Open* (the app is

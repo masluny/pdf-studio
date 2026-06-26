@@ -1,9 +1,9 @@
 {
   "name": "pdf-editor-tauri",
   "private": true,
-  "version": "0.3.8",
+  "version": "0.3.9",
   "type": "module",
-  "description": "Professional PDF editor & viewer — Tauri + Rust + Tailwind + PDF.js",
+  "description": "Professional PDF editor & viewer \u2014 Tauri + Rust + Tailwind + PDF.js",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
