@@ -1,18 +1,75 @@
 """
-Take the ACTUAL video-editor icon (the one shown on the Mac desktop) and
-recolor its palette: blue→pink, yellow→green. Save all Tauri icon formats.
+Build the PDF-editor app icon from the shared Revind logo (revindlogo.png),
+hue-shifted from purple to green so it reads as a sibling app.
+
+  - flood-fill the white background away from the corners (rounded corners -> transparent)
+  - crop to the tile, rotate the hue of the coloured blobs (HUE_SHIFT degrees)
+  - center on a transparent canvas at the macOS safe-area scale (~80%)
+  - export every Tauri icon size + icon.icns / icon.ico + logo.png
+
+Run:  python3 generate_icon.py
 """
 
 from PIL import Image
+from collections import deque
 import colorsys
 import os, subprocess, shutil
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-ICNS_SRC = os.path.join(SRC_DIR, "video_editor_icon_src.png")
+SRC_LOGO = os.path.join(os.path.dirname(SRC_DIR), "revindlogo.png")
 DST_DIR = os.path.join(SRC_DIR, "src-tauri", "icons")
+MASTER_SIZE = 1024
+SAFE_SCALE = 0.805     # squircle body / canvas, per Apple's icon grid
+HUE_SHIFT = -110       # degrees: purple -> green
 
 
-def recolor(img):
+def build_master(src_path, hue_shift=0.0):
+    im = Image.open(src_path).convert("RGBA")
+    w, h = im.size
+    px = im.load()
+
+    def is_white(p):
+        return p[0] > 238 and p[1] > 238 and p[2] > 238
+
+    seen = bytearray(w * h)
+    dq = deque([(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)])
+    while dq:
+        x, y = dq.popleft()
+        if x < 0 or y < 0 or x >= w or y >= h:
+            continue
+        i = y * w + x
+        if seen[i] or not is_white(px[x, y]):
+            continue
+        seen[i] = 1
+        dq.extend([(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)])
+
+    xs, ys = [], []
+    for y in range(h):
+        row = y * w
+        for x in range(w):
+            if seen[row + x]:
+                px[x, y] = (0, 0, 0, 0)
+            elif px[x, y][3] > 0:
+                xs.append(x)
+                ys.append(y)
+    tile = im.crop((min(xs), min(ys), max(xs) + 1, max(ys) + 1))
+
+    if hue_shift:
+        tile = recolor(tile, hue_shift)
+
+    target = int(MASTER_SIZE * SAFE_SCALE)
+    tw, th = tile.size
+    scale = target / max(tw, th)
+    tile = tile.resize((max(1, round(tw * scale)), max(1, round(th * scale))),
+                       Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", (MASTER_SIZE, MASTER_SIZE), (0, 0, 0, 0))
+    canvas.paste(tile, ((MASTER_SIZE - tile.width) // 2,
+                        (MASTER_SIZE - tile.height) // 2), tile)
+    return canvas
+
+
+def recolor(img, hue_shift):
+    """Rotate hue of coloured pixels by hue_shift degrees; keep the dark tile."""
     img = img.convert("RGBA")
     px = img.load()
     w, h = img.size
@@ -22,44 +79,16 @@ def recolor(img):
             if a < 10:
                 continue
             hue, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
-            hue_deg = hue * 360
-
-            # Dark pixels: desaturate to remove any color tint from background
-            if v < 0.25:
-                gray = int(v * 255)
-                px[x, y] = (gray, gray, gray, a)
+            if v < 0.22 or s < 0.06:   # dark tile / near-gray: leave as-is
                 continue
-
-            # Skip truly gray pixels
-            if s < 0.05:
-                continue
-
-            # Recolor: blue/cyan/teal → pink, yellow/gold → green
-            if 100 <= hue_deg <= 250:
-                nr, ng, nb = colorsys.hsv_to_rgb(335 / 360, s, v)
-                px[x, y] = (int(nr * 255), int(ng * 255), int(nb * 255), a)
-            elif 15 <= hue_deg < 100:
-                nr, ng, nb = colorsys.hsv_to_rgb(140 / 360, s, v)
-                px[x, y] = (int(nr * 255), int(ng * 255), int(nb * 255), a)
+            hue = (hue + hue_shift / 360.0) % 1.0
+            nr, ng, nb = colorsys.hsv_to_rgb(hue, s, v)
+            px[x, y] = (int(nr * 255), int(ng * 255), int(nb * 255), a)
     return img
 
 
-if __name__ == "__main__":
-    os.makedirs(DST_DIR, exist_ok=True)
-
-    print("Loading video-editor icon…")
-    original = Image.open(ICNS_SRC)
-    print(f"  {original.size[0]}x{original.size[1]}")
-
-    print("Recoloring…")
-    master = recolor(original.copy())
-
-    # Save preview
-    preview = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon_preview.png")
-    master.save(preview, "PNG")
-    print(f"  Preview: {preview}")
-
-    # Save all PNG sizes
+def export(master, dst_dir, also_logo=None):
+    os.makedirs(dst_dir, exist_ok=True)
     sizes = {
         "icon.png": 512, "32x32.png": 32, "64x64.png": 64,
         "128x128.png": 128, "128x128@2x.png": 256,
@@ -71,32 +100,36 @@ if __name__ == "__main__":
     }
     for name, sz in sizes.items():
         master.resize((sz, sz), Image.Resampling.LANCZOS).save(
-            os.path.join(DST_DIR, name), "PNG")
-        print(f"  ✓ {name}")
+            os.path.join(dst_dir, name), "PNG")
 
-    # .ico
     ico_sizes = [16, 24, 32, 48, 64, 128, 256]
-    ico_imgs = [master.resize((s, s), Image.Resampling.LANCZOS) for s in ico_sizes]
-    ico_imgs[0].save(os.path.join(DST_DIR, "icon.ico"), format="ICO",
-                     sizes=[(s, s) for s in ico_sizes], append_images=ico_imgs[1:])
-    print("  ✓ icon.ico")
+    ico = [master.resize((s, s), Image.Resampling.LANCZOS) for s in ico_sizes]
+    ico[0].save(os.path.join(dst_dir, "icon.ico"), format="ICO",
+                sizes=[(s, s) for s in ico_sizes], append_images=ico[1:])
 
-    # .icns
-    iconset = os.path.join(DST_DIR, "icon.iconset")
+    iconset = os.path.join(dst_dir, "icon.iconset")
     os.makedirs(iconset, exist_ok=True)
     for name, sz in {"icon_16x16.png": 16, "icon_16x16@2x.png": 32,
-                      "icon_32x32.png": 32, "icon_32x32@2x.png": 64,
-                      "icon_128x128.png": 128, "icon_128x128@2x.png": 256,
-                      "icon_256x256.png": 256, "icon_256x256@2x.png": 512,
-                      "icon_512x512.png": 512, "icon_512x512@2x.png": 1024}.items():
+                     "icon_32x32.png": 32, "icon_32x32@2x.png": 64,
+                     "icon_128x128.png": 128, "icon_128x128@2x.png": 256,
+                     "icon_256x256.png": 256, "icon_256x256@2x.png": 512,
+                     "icon_512x512.png": 512, "icon_512x512@2x.png": 1024}.items():
         master.resize((sz, sz), Image.Resampling.LANCZOS).save(
             os.path.join(iconset, name), "PNG")
     try:
         subprocess.run(["iconutil", "-c", "icns", iconset, "-o",
-                         os.path.join(DST_DIR, "icon.icns")], check=True)
-        print("  ✓ icon.icns")
+                        os.path.join(dst_dir, "icon.icns")], check=True)
     except Exception as e:
-        print(f"  ⚠ .icns: {e}")
+        print(f"  icns: {e}")
     shutil.rmtree(iconset, ignore_errors=True)
 
-    print("✅ Done!")
+    if also_logo:
+        master.resize((512, 512), Image.Resampling.LANCZOS).save(also_logo, "PNG")
+
+
+if __name__ == "__main__":
+    print("Building PDF-editor (green) master from", SRC_LOGO)
+    master = build_master(SRC_LOGO, hue_shift=HUE_SHIFT)
+    master.save(os.path.join(SRC_DIR, "icon_preview.png"), "PNG")
+    export(master, DST_DIR, also_logo=os.path.join(SRC_DIR, "logo.png"))
+    print("Done -> pdf-editor-tauri/src-tauri/icons + logo.png")

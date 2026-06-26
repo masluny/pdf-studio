@@ -2563,7 +2563,7 @@ checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
 
 [[package]]
 name = "pdf-studio"
-version = "0.3.2"
+version = "0.3.5"
 dependencies = [
  "base64 0.22.1",
  "image",
