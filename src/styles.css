@@ -53,12 +53,36 @@ body {
 
 /* ============================ layout ============================ */
 .app-grid { display: grid; grid-template-rows: auto 1fr auto; height: 100%; }
-.body-grid { display: grid; grid-template-columns: 312px 1fr; min-height: 0; transition: grid-template-columns .15s ease; }
-.body-grid.sidebar-hidden { grid-template-columns: 0 1fr; }
+.body-grid { display: grid; grid-template-columns: 312px minmax(0, 1fr); min-height: 0; transition: grid-template-columns .15s ease; }
+.body-grid.sidebar-hidden { grid-template-columns: minmax(0, 1fr); }
 .body-grid.sidebar-hidden .sidebar { display: none; }
 
 /* editable-object overlay affordances */
 .overlay rect[data-id]:hover { fill: rgba(79, 140, 255, 0.12); cursor: pointer; }
+.edit-text-popover {
+  position: absolute;
+  z-index: 30;
+  min-width: 220px;
+  padding: 8px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 14px 44px var(--shadow);
+}
+.edit-text-popover textarea {
+  display: block;
+  width: 100%;
+  min-height: 54px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  color: var(--text);
+  background: var(--sunken);
+  font: inherit;
+}
+.edit-text-popover textarea:focus { outline: none; border-color: var(--accent); }
+.edit-text-popover .row { display: flex; gap: 6px; margin-top: 8px; justify-content: flex-end; }
 
 .header {
   display: flex; align-items: center; gap: 6px;
@@ -91,11 +115,14 @@ body {
 .btn svg { width: 19px; height: 19px; }
 
 .btn-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  height: 32px;
   background: var(--accent); color: var(--on-accent);
-  font-weight: 600; padding: 0 13px; border-radius: 9px;
+  font-weight: 600; padding: 0 16px; border-radius: 9px;
+  border: none; cursor: pointer; white-space: nowrap;
 }
 .btn-primary:hover { background: var(--accent-hover); }
-.btn-primary svg { width: 17px; height: 17px; }
+.btn-primary svg { width: 17px; height: 17px; flex: none; }
 
 .divider { width: 1px; height: 24px; background: var(--border); margin: 0 5px; flex: none; }
 
@@ -185,7 +212,8 @@ body {
 
 /* ============================ pdf canvas area ============================ */
 .viewer { position: relative; overflow: auto; background: var(--canvas); min-height: 0; }
-.page-wrap { position: relative; margin: 28px auto; width: max-content; }
+.pages-stack { display: block; padding: 4px 0 24px; }
+.page-wrap { position: relative; margin: 16px auto; width: max-content; }
 .page-shadow { box-shadow: 0 10px 34px var(--shadow); border-radius: 2px; }
 .pdf-canvas { display: block; background: #fff; border-radius: 2px; }
 .overlay { position: absolute; inset: 0; }

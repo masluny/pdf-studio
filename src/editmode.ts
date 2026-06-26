@@ -17,6 +17,7 @@ let pageH = 0;
 let selected: number | null = null;
 let editTool: "select" | "text" = "select";
 let dirty = false;
+let activeEditor: HTMLDivElement | null = null;
 
 // drag state
 let dragging = false;
@@ -75,6 +76,7 @@ export function leaveEdit() {
 }
 
 async function renderEditPage() {
+  closeTextEditor();
   const scale = app.scale;
   let res: be.RenderResult;
   try {
@@ -123,6 +125,7 @@ function drawObjects() {
     if (!isSel) r.setAttribute("stroke-dasharray", "4 3");
     r.setAttribute("data-id", `${o.id}`);
     r.style.cursor = editTool === "select" ? "move" : "crosshair";
+    r.style.pointerEvents = "all";
     overlay.appendChild(r);
     rectEls.set(o.id, r);
   }
@@ -147,6 +150,7 @@ function hit(x: number, y: number): be.EditObject | null {
 
 function attachPointer() {
   overlay.addEventListener("pointerdown", (e) => {
+    if (activeEditor) return;
     overlay.setPointerCapture(e.pointerId);
     const [x, y] = toPoint(e);
     if (editTool === "text") {
@@ -157,6 +161,10 @@ function attachPointer() {
     selected = h ? h.id : null;
     drawObjects();
     emit("mode");
+    if (h?.kind === "text" && e.detail >= 2) {
+      beginTextEdit(h);
+      return;
+    }
     if (h) {
       dragging = true;
       dragId = h.id;
@@ -200,18 +208,75 @@ function attachPointer() {
     if (o && o.kind === "text") {
       selected = o.id;
       drawObjects();
-      const t = window.prompt("Edit text:", o.text ?? "");
-      if (t !== null && t !== o.text) {
-        try {
-          await be.editSetText(app.page, o.id, t);
-          dirty = true;
-          await renderEditPage();
-        } catch (err) {
-          status("Edit failed: " + err);
-        }
-      }
+      beginTextEdit(o);
     }
   });
+}
+
+function closeTextEditor() {
+  activeEditor?.remove();
+  activeEditor = null;
+}
+
+function beginTextEdit(o: be.EditObject) {
+  closeTextEditor();
+  selected = o.id;
+  drawObjects();
+
+  const [x0, y0, x1, y1] = o.bbox;
+  const editor = document.createElement("div");
+  editor.className = "edit-text-popover";
+  editor.style.left = `${Math.max(0, x0 * app.scale)}px`;
+  editor.style.top = `${Math.max(0, y0 * app.scale)}px`;
+  editor.style.width = `${Math.max(220, (x1 - x0) * app.scale + 34)}px`;
+
+  const area = document.createElement("textarea");
+  area.value = o.text ?? "";
+  area.spellcheck = false;
+  area.style.minHeight = `${Math.max(54, (y1 - y0) * app.scale + 28)}px`;
+
+  const row = document.createElement("div");
+  row.className = "row";
+  const cancel = document.createElement("button");
+  cancel.className = "ghost-sm";
+  cancel.textContent = "Cancel";
+  const save = document.createElement("button");
+  save.className = "ghost-sm";
+  save.textContent = "Apply";
+
+  const commit = async () => {
+    const t = area.value;
+    closeTextEditor();
+    if (t === (o.text ?? "")) return;
+    try {
+      await be.editSetText(app.page, o.id, t);
+      dirty = true;
+      await renderEditPage();
+      status("Text updated");
+    } catch (err) {
+      status("Edit failed: " + err);
+      window.alert("Could not edit this text object:\n" + err);
+    }
+  };
+  cancel.onclick = closeTextEditor;
+  save.onclick = () => { commit(); };
+  area.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeTextEditor();
+    } else if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      commit();
+    }
+  });
+
+  row.append(cancel, save);
+  editor.append(area, row);
+  editWrap.appendChild(editor);
+  activeEditor = editor;
+  area.focus();
+  area.select();
+  status("Editing text — Enter applies, Shift+Enter adds a line, Esc cancels");
 }
 
 async function addText(x: number, y: number) {
@@ -244,6 +309,7 @@ export async function redoEdit() {
 }
 
 export function deselect() {
+  closeTextEditor();
   if (selected !== null) { selected = null; drawObjects(); emit("mode"); }
 }
 
@@ -265,12 +331,7 @@ export async function editText() {
     status("Select a text object first");
     return;
   }
-  const t = window.prompt("Edit text:", o.text ?? "");
-  if (t !== null && t !== o.text) {
-    await be.editSetText(app.page, o.id, t);
-    dirty = true;
-    await renderEditPage();
-  }
+  beginTextEdit(o);
 }
 
 export async function saveEdited() {

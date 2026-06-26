@@ -16,16 +16,16 @@ jobs:
         include:
           - platform: macos-latest # Apple Silicon
             target: aarch64-apple-darwin
-            args: "--target aarch64-apple-darwin"
+            args: "--target aarch64-apple-darwin --config src-tauri/tauri.macos.conf.json"
           - platform: macos-latest # Intel
             target: x86_64-apple-darwin
-            args: "--target x86_64-apple-darwin"
+            args: "--target x86_64-apple-darwin --config src-tauri/tauri.macos.conf.json"
           - platform: ubuntu-22.04
             target: ""
-            args: ""
+            args: "--config src-tauri/tauri.linux.conf.json"
           - platform: windows-latest
             target: ""
-            args: ""
+            args: "--config src-tauri/tauri.windows.conf.json"
 
     runs-on: ${{ matrix.platform }}
     steps:
