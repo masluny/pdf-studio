@@ -1,4 +1,4 @@
-# PDF Studio — Tauri + Rust + Tailwind
+# PDF Studio - Tauri + Rust + Tailwind
 
 A professional desktop **PDF editor & viewer**, rebuilt as a native
 [Tauri 2](https://tauri.app) app:
@@ -6,7 +6,7 @@ A professional desktop **PDF editor & viewer**, rebuilt as a native
 - **Rust** backend (native file/sidecar I/O, PDF metadata via `lopdf`).
 - **TypeScript + Tailwind v4** frontend (the whole editor UI).
 - **PDF.js** for rendering, text, outline, and search.
-- **pdf-lib** for structural editing and baked-annotation export — all in the
+- **pdf-lib** for structural editing and baked-annotation export - all in the
   webview, so editing is reliable and portable.
 
 This is a from-scratch port of the PySide6 `pdf_annotator` app.
