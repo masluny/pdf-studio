@@ -4,6 +4,9 @@ src-tauri/target/
 src-tauri/gen/
 *.log
 .DS_Store
+tmp_iconset/
+video_editor_icon_src.png
+icon_preview.png
 
 # PDFium native library (fetched per-platform in CI / dev)
 src-tauri/libpdfium.dylib
