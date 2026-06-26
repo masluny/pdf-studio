@@ -65,7 +65,7 @@ npm run tauri build    # → src-tauri/target/release/bundle/macos/PDF Studio.ap
 
 - **Redaction** covers the area opaquely (white/black box). True content
   *removal* needs a server-side pass; PyMuPDF's `apply_redactions` does this in
-  the Python app — a follow-up could add it via a Rust `lopdf` command.
+  the Python app - a follow-up could add it via a Rust `lopdf` command.
 - **Highlight** is a rectangular region (not word-snapped); the text layer is
   available to upgrade this later.
 - Export bakes marks as page content (WYSIWYG/flattened) rather than re-editable
