@@ -165,9 +165,12 @@ export function renderPage() {
 }
 
 // ------------------------------------------------------------- navigation
+let editHooks: { goto?: (n: number) => void; relayout?: () => void } = {};
+export function setEditHooks(h: { goto?: (n: number) => void; relayout?: () => void }) { editHooks = h; }
+
 export function gotoPage(n: number) {
   const clamped = Math.max(0, Math.min(n, app.pageCount - 1));
-  if (app.mode === "edit") { app.page = clamped; emit("page"); return; }
+  if (app.mode === "edit") { app.page = clamped; editHooks.goto?.(clamped); emit("page"); return; }
   const b = blocks[clamped];
   if (!b) return;
   app.page = clamped;
@@ -179,7 +182,7 @@ export function gotoPage(n: number) {
 export function setZoom(s: number) {
   const anchorPage = app.page;
   app.scale = Math.max(0.25, Math.min(6, s));
-  if (app.mode === "edit") { emit("page"); return; } // Edit mode re-renders its own page
+  if (app.mode === "edit") { editHooks.relayout?.(); emit("page"); return; }
   for (const b of blocks) layoutBlock(b);
   // keep the page you were on in view
   const b = blocks[anchorPage];

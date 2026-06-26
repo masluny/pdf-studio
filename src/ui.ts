@@ -655,10 +655,18 @@ function wireShortcuts() {
       e.preventDefault();
       if (app.mode === "edit") editDeleteSelected(); else deleteSelected();
     }
+    else if (!typing && !meta && app.mode === "edit") {
+      if (e.key.toLowerCase() === "t") {
+        e.preventDefault();
+        setEditToolUI("text");
+      } else if (e.key.toLowerCase() === "v") {
+        e.preventDefault();
+        setEditToolUI("select");
+      }
+    }
     else if (!typing && !meta && app.mode === "view" && app.pdfDoc) {
       const t = TOOLS.find(([, , , k]) => k.toLowerCase() === e.key.toLowerCase());
       if (t) setTool(t[0]);
     }
   });
 }
-

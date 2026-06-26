@@ -1,62 +1,65 @@
-import { app, on, emit, status } from "./state";
+import { app, emit, status } from "./state";
 import * as be from "./backend";
-import { setVisible, renderPage } from "./pdfview";
+import { setVisible, renderPage, setEditHooks } from "./pdfview";
 import { savePdfDialog, isTauri } from "./backend";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-let viewerEl!: HTMLElement;
-let editWrap!: HTMLDivElement;
-let img!: HTMLImageElement;
-let overlay!: SVGSVGElement;
+interface EditBlock {
+  index: number;
+  wrap: HTMLDivElement;
+  img: HTMLImageElement;
+  overlay: SVGSVGElement;
+  pw: number;
+  ph: number;
+  objects: be.EditObject[];
+  rectEls: Map<number, SVGRectElement>;
+  renderedScale: number;
+  rendering: boolean;
+}
 
-let objects: be.EditObject[] = [];
-let rectEls = new Map<number, SVGRectElement>();
-let pageW = 0;
-let pageH = 0;
-let selected: number | null = null;
-let editTool: "select" | "text" = "select";
+type EditTool = "select" | "text";
+type Selection = { page: number; id: number } | null;
+
+let viewerEl!: HTMLElement;
+let pagesEl!: HTMLDivElement;
+let blocks: EditBlock[] = [];
+let selected: Selection = null;
+let editTool: EditTool = "select";
 let dirty = false;
 let activeEditor: HTMLDivElement | null = null;
-let lastEditPage = -1;
+let scrollScheduled = false;
 
 // drag state
 let dragging = false;
-let startX = 0, startY = 0;
+let startX = 0;
+let startY = 0;
+let dragPage = -1;
 let dragId: number | null = null;
 
 export function initEditMode(viewer: HTMLElement) {
   viewerEl = viewer;
-  editWrap = document.createElement("div");
-  editWrap.className = "page-wrap page-shadow";
-  editWrap.style.display = "none";
-  img = document.createElement("img");
-  img.className = "pdf-canvas";
-  img.draggable = false;
-  overlay = document.createElementNS(SVG_NS, "svg") as SVGSVGElement;
-  overlay.classList.add("overlay");
-  editWrap.append(img, overlay);
-  viewerEl.appendChild(editWrap);
-  attachPointer();
+  pagesEl = document.createElement("div");
+  pagesEl.className = "pages-stack edit-pages-stack";
+  pagesEl.style.display = "none";
+  viewerEl.appendChild(pagesEl);
 
-  // Re-render only on page/zoom changes (page nav, zoom). Scrolling no longer
-  // emits "page" while in edit mode, so this won't fire on scroll.
-  on("page", async () => {
-    if (app.mode !== "edit") return;
-    const changed = app.page !== lastEditPage;
-    await renderEditPage();
-    if (changed) { lastEditPage = app.page; viewerEl.scrollTop = 0; }
-  });
+  viewerEl.addEventListener("scroll", onEditScroll, { passive: true });
+  setEditHooks({ goto: gotoEditPage, relayout: relayoutEditPages });
 }
 
 export function selectedObject(): be.EditObject | null {
-  return objects.find((o) => o.id === selected) ?? null;
+  if (!selected) return null;
+  const block = blocks[selected.page];
+  return block?.objects.find((o) => o.id === selected?.id) ?? null;
 }
+
 export function isDirty() { return dirty; }
-export function currentEditTool(): "select" | "text" { return editTool; }
-export function setEditTool(t: "select" | "text") {
+export function currentEditTool(): EditTool { return editTool; }
+
+export function setEditTool(t: EditTool) {
   editTool = t;
-  drawObjects();
+  drawAllObjects();
   emit("mode");
 }
 
@@ -72,59 +75,179 @@ export async function enterEdit(): Promise<boolean> {
     window.alert("Could not open for editing:\n" + e);
     return false;
   }
+
   dirty = false;
   selected = null;
   editTool = "select";
+  closeTextEditor();
   setVisible(false);
-  editWrap.style.display = "block";
-  await renderEditPage();
-  lastEditPage = app.page;
-  viewerEl.scrollTop = 0;
+  pagesEl.style.display = "block";
+
+  await buildEditStack();
+  gotoEditPage(app.page);
+  renderVisibleEditPages();
   emit("mode");
-  status("Edit mode — double-click text to retype, drag to move, Delete to remove");
+  status("Edit mode — scroll pages, double-click text to retype, T adds text");
   return true;
 }
 
 export function leaveEdit() {
-  editWrap.style.display = "none";
+  closeTextEditor();
+  pagesEl.style.display = "none";
   selected = null;
   setVisible(true);
   renderPage();
 }
 
-async function renderEditPage() {
-  closeTextEditor();
-  const scale = app.scale;
-  let res: be.RenderResult;
-  try {
-    res = await be.editRenderPage(app.page, scale);
-  } catch (e) {
-    status("Render failed: " + e);
-    window.alert("Could not render for editing:\n" + e);
-    return;
-  }
-  img.src = "data:image/png;base64," + res.png;
-  pageW = res.width; pageH = res.height;
-  const dispW = pageW * scale, dispH = pageH * scale;
-  img.style.width = `${dispW}px`; img.style.height = `${dispH}px`;
-  editWrap.style.width = `${dispW}px`; editWrap.style.height = `${dispH}px`;
-  overlay.setAttribute("width", `${dispW}`);
-  overlay.setAttribute("height", `${dispH}`);
-  overlay.setAttribute("viewBox", `0 0 ${pageW} ${pageH}`);
+async function buildEditStack() {
+  pagesEl.innerHTML = "";
+  blocks = [];
+  for (let i = 0; i < app.pageCount; i++) {
+    const wrap = document.createElement("div");
+    wrap.className = "page-wrap page-shadow";
 
-  try {
-    objects = await be.editObjects(app.page);
-  } catch {
-    objects = [];
+    const img = document.createElement("img");
+    img.className = "pdf-canvas";
+    img.draggable = false;
+
+    const overlay = document.createElementNS(SVG_NS, "svg") as SVGSVGElement;
+    overlay.classList.add("overlay");
+    overlay.dataset.page = `${i}`;
+
+    wrap.append(img, overlay);
+    pagesEl.appendChild(wrap);
+
+    const block: EditBlock = {
+      index: i,
+      wrap,
+      img,
+      overlay,
+      pw: 612,
+      ph: 792,
+      objects: [],
+      rectEls: new Map(),
+      renderedScale: -1,
+      rendering: false,
+    };
+    blocks.push(block);
+    attachPointer(block);
   }
-  drawObjects();
-  emit("mode");
+
+  await seedPageSizes();
+  for (const block of blocks) layoutBlock(block);
 }
 
-function drawObjects() {
-  while (overlay.firstChild) overlay.removeChild(overlay.firstChild);
-  rectEls.clear();
-  for (const o of objects) {
+async function seedPageSizes() {
+  // PDF.js is already loaded in normal app flow, so use it for fast layout
+  // sizing. If unavailable, visible PDFium renders will correct dimensions.
+  if (!app.pdfDoc) return;
+  for (const block of blocks) {
+    try {
+      const page = await app.pdfDoc.getPage(block.index + 1);
+      const vp = page.getViewport({ scale: 1 });
+      block.pw = vp.width;
+      block.ph = vp.height;
+    } catch {
+      /* PDFium render will fill this in later. */
+    }
+  }
+}
+
+function layoutBlock(block: EditBlock) {
+  const w = block.pw * app.scale;
+  const h = block.ph * app.scale;
+  block.wrap.style.width = `${w}px`;
+  block.wrap.style.height = `${h}px`;
+  block.img.style.width = `${w}px`;
+  block.img.style.height = `${h}px`;
+  block.overlay.setAttribute("width", `${w}`);
+  block.overlay.setAttribute("height", `${h}`);
+  block.overlay.setAttribute("viewBox", `0 0 ${block.pw} ${block.ph}`);
+  block.renderedScale = -1;
+}
+
+async function renderEditBlock(block: EditBlock, force = false) {
+  if (block.rendering) return;
+  if (!force && block.renderedScale === app.scale) return;
+  block.rendering = true;
+  const myScale = app.scale;
+  try {
+    const res = await be.editRenderPage(block.index, myScale);
+    block.img.src = "data:image/png;base64," + res.png;
+    if (block.pw !== res.width || block.ph !== res.height) {
+      block.pw = res.width;
+      block.ph = res.height;
+      layoutBlock(block);
+    }
+    block.objects = await be.editObjects(block.index);
+    block.renderedScale = myScale;
+    drawObjects(block);
+  } catch (e) {
+    status(`Render failed on page ${block.index + 1}: ${e}`);
+  } finally {
+    block.rendering = false;
+  }
+  if (app.scale !== myScale) renderEditBlock(block, true);
+}
+
+function renderVisibleEditPages() {
+  const top = viewerEl.scrollTop - 450;
+  const bot = viewerEl.scrollTop + viewerEl.clientHeight + 450;
+  for (const block of blocks) {
+    const y = block.wrap.offsetTop;
+    if (y + block.wrap.offsetHeight >= top && y <= bot) renderEditBlock(block);
+  }
+}
+
+function relayoutEditPages() {
+  const anchorPage = app.page;
+  for (const block of blocks) layoutBlock(block);
+  const anchor = blocks[anchorPage];
+  if (anchor) viewerEl.scrollTop = Math.max(0, anchor.wrap.offsetTop - 14);
+  renderVisibleEditPages();
+  drawAllObjects();
+}
+
+function gotoEditPage(page: number) {
+  const block = blocks[page];
+  if (!block) return;
+  viewerEl.scrollTo({ top: Math.max(0, block.wrap.offsetTop - 14), behavior: "auto" });
+  renderVisibleEditPages();
+}
+
+function onEditScroll() {
+  if (app.mode !== "edit") return;
+  if (scrollScheduled) return;
+  scrollScheduled = true;
+  requestAnimationFrame(() => {
+    scrollScheduled = false;
+    updateEditCurrentPage();
+    renderVisibleEditPages();
+  });
+}
+
+function updateEditCurrentPage() {
+  if (!blocks.length) return;
+  const center = viewerEl.scrollTop + viewerEl.clientHeight / 2;
+  let cur = 0;
+  for (const block of blocks) {
+    if (block.wrap.offsetTop <= center) cur = block.index;
+    else break;
+  }
+  if (cur !== app.page) {
+    app.page = cur;
+    emit("page");
+  }
+}
+
+function drawAllObjects() {
+  for (const block of blocks) drawObjects(block);
+}
+
+function drawObjects(block: EditBlock) {
+  while (block.overlay.firstChild) block.overlay.removeChild(block.overlay.firstChild);
+  block.rectEls.clear();
+  for (const o of block.objects) {
     const [x0, y0, x1, y1] = o.bbox;
     const r = document.createElementNS(SVG_NS, "rect") as SVGRectElement;
     r.setAttribute("x", `${x0}`);
@@ -132,102 +255,117 @@ function drawObjects() {
     r.setAttribute("width", `${Math.max(1, x1 - x0)}`);
     r.setAttribute("height", `${Math.max(1, y1 - y0)}`);
     r.setAttribute("fill", "transparent");
-    const isSel = o.id === selected;
+    const isSel = selected?.page === block.index && selected.id === o.id;
     const stroke = isSel ? "var(--accent)"
       : o.kind === "image" ? "#18b96b"
       : o.kind === "text" ? "#5b82f7" : "#9aa1ac";
     r.setAttribute("stroke", stroke);
-    r.setAttribute("stroke-width", isSel ? "1.6" : "1");
+    r.setAttribute("stroke-width", isSel ? "1.8" : "1");
     r.setAttribute("stroke-opacity", isSel ? "1" : "0.55");
     if (!isSel) r.setAttribute("stroke-dasharray", "4 3");
     r.setAttribute("data-id", `${o.id}`);
-    r.style.cursor = editTool === "select" ? "move" : "crosshair";
+    r.style.cursor = editTool === "select" ? "move" : "text";
     r.style.pointerEvents = "all";
-    overlay.appendChild(r);
-    rectEls.set(o.id, r);
+    block.overlay.appendChild(r);
+    block.rectEls.set(o.id, r);
   }
 }
 
-function toPoint(e: PointerEvent): [number, number] {
-  const rect = overlay.getBoundingClientRect();
+function toPoint(e: PointerEvent, block: EditBlock): [number, number] {
+  const rect = block.overlay.getBoundingClientRect();
   return [
-    ((e.clientX - rect.left) / rect.width) * pageW,
-    ((e.clientY - rect.top) / rect.height) * pageH,
+    ((e.clientX - rect.left) / rect.width) * block.pw,
+    ((e.clientY - rect.top) / rect.height) * block.ph,
   ];
 }
 
-function hit(x: number, y: number): be.EditObject | null {
-  // topmost (last drawn) object whose bbox contains the point
-  for (let i = objects.length - 1; i >= 0; i--) {
-    const [x0, y0, x1, y1] = objects[i].bbox;
-    if (x >= x0 - 2 && x <= x1 + 2 && y >= y0 - 2 && y <= y1 + 2) return objects[i];
+function hit(block: EditBlock, x: number, y: number): be.EditObject | null {
+  for (let i = block.objects.length - 1; i >= 0; i--) {
+    const [x0, y0, x1, y1] = block.objects[i].bbox;
+    if (x >= x0 - 3 && x <= x1 + 3 && y >= y0 - 3 && y <= y1 + 3) {
+      return block.objects[i];
+    }
   }
   return null;
 }
 
-function attachPointer() {
-  overlay.addEventListener("pointerdown", (e) => {
+function attachPointer(block: EditBlock) {
+  block.overlay.addEventListener("pointerdown", (e) => {
     if (activeEditor) return;
-    overlay.setPointerCapture(e.pointerId);
-    const [x, y] = toPoint(e);
+    block.overlay.setPointerCapture(e.pointerId);
+    app.page = block.index;
+    emit("page");
+    const [x, y] = toPoint(e, block);
     if (editTool === "text") {
-      addText(x, y);
+      beginNewText(block, x, y);
       return;
     }
-    const h = hit(x, y);
-    selected = h ? h.id : null;
-    drawObjects();
+    const h = hit(block, x, y);
+    selected = h ? { page: block.index, id: h.id } : null;
+    drawAllObjects();
     emit("mode");
     if (h?.kind === "text" && e.detail >= 2) {
-      beginTextEdit(h);
+      beginTextEdit(block, h);
       return;
     }
     if (h) {
       dragging = true;
+      dragPage = block.index;
       dragId = h.id;
       startX = x;
       startY = y;
     }
   });
-  overlay.addEventListener("pointermove", (e) => {
-    if (!dragging || dragId === null) return;
-    const [x, y] = toPoint(e);
-    const r = rectEls.get(dragId);
-    const o = objects.find((ob) => ob.id === dragId);
+
+  block.overlay.addEventListener("pointermove", (e) => {
+    if (!dragging || dragId === null || dragPage !== block.index) return;
+    const [x, y] = toPoint(e, block);
+    const r = block.rectEls.get(dragId);
+    const o = block.objects.find((ob) => ob.id === dragId);
     if (r && o) {
       r.setAttribute("x", `${o.bbox[0] + (x - startX)}`);
       r.setAttribute("y", `${o.bbox[1] + (y - startY)}`);
     }
   });
-  overlay.addEventListener("pointerup", async (e) => {
-    if (!dragging || dragId === null) return;
-    const [x, y] = toPoint(e);
-    const dx = x - startX, dy = y - startY;
-    dragging = false;
+
+  block.overlay.addEventListener("pointerup", async (e) => {
+    if (!dragging || dragId === null || dragPage !== block.index) return;
+    const [x, y] = toPoint(e, block);
+    const dx = x - startX;
+    const dy = y - startY;
     const id = dragId;
+    dragging = false;
     dragId = null;
+    dragPage = -1;
     if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
       try {
-        await be.editMove(app.page, id, dx, dy);
+        await be.editMove(block.index, id, dx, dy);
         dirty = true;
-        await renderEditPage();
-        selected = id;
-        drawObjects();
+        selected = { page: block.index, id };
+        await refreshBlock(block, true);
       } catch (err) {
         status("Move failed: " + err);
-        await renderEditPage();
+        await refreshBlock(block, true);
       }
     }
   });
-  overlay.addEventListener("dblclick", async (e) => {
-    const [x, y] = toPoint(e as unknown as PointerEvent);
-    const o = hit(x, y);
+
+  block.overlay.addEventListener("dblclick", (e) => {
+    const [x, y] = toPoint(e as unknown as PointerEvent, block);
+    const o = hit(block, x, y);
     if (o && o.kind === "text") {
-      selected = o.id;
-      drawObjects();
-      beginTextEdit(o);
+      selected = { page: block.index, id: o.id };
+      drawAllObjects();
+      beginTextEdit(block, o);
     }
   });
+}
+
+async function refreshBlock(block: EditBlock, force = true) {
+  block.renderedScale = -1;
+  await renderEditBlock(block, force);
+  drawAllObjects();
+  emit("mode");
 }
 
 function closeTextEditor() {
@@ -235,22 +373,27 @@ function closeTextEditor() {
   activeEditor = null;
 }
 
-function beginTextEdit(o: be.EditObject) {
+function makeTextEditor(
+  block: EditBlock,
+  x: number,
+  y: number,
+  value: string,
+  title: string,
+  commit: (text: string) => Promise<void>,
+  options: { select?: boolean; width?: number; height?: number } = {},
+) {
   closeTextEditor();
-  selected = o.id;
-  drawObjects();
-
-  const [x0, y0, x1, y1] = o.bbox;
   const editor = document.createElement("div");
   editor.className = "edit-text-popover";
-  editor.style.left = `${Math.max(0, x0 * app.scale)}px`;
-  editor.style.top = `${Math.max(0, y0 * app.scale)}px`;
-  editor.style.width = `${Math.max(220, (x1 - x0) * app.scale + 34)}px`;
+  editor.style.left = `${Math.max(0, x * app.scale)}px`;
+  editor.style.top = `${Math.max(0, y * app.scale)}px`;
+  editor.style.width = `${Math.max(220, options.width ?? 260)}px`;
 
   const area = document.createElement("textarea");
-  area.value = o.text ?? "";
+  area.value = value;
+  area.placeholder = title;
   area.spellcheck = false;
-  area.style.minHeight = `${Math.max(54, (y1 - y0) * app.scale + 28)}px`;
+  area.style.minHeight = `${Math.max(54, options.height ?? 68)}px`;
 
   const row = document.createElement("div");
   row.className = "row";
@@ -261,82 +404,141 @@ function beginTextEdit(o: be.EditObject) {
   save.className = "ghost-sm";
   save.textContent = "Apply";
 
-  const commit = async () => {
-    const t = area.value;
+  const apply = async () => {
+    const t = area.value.trimEnd();
     closeTextEditor();
-    if (t === (o.text ?? "")) return;
-    try {
-      await be.editSetText(app.page, o.id, t);
-      dirty = true;
-      await renderEditPage();
-      status("Text updated");
-    } catch (err) {
-      status("Edit failed: " + err);
-      window.alert("Could not edit this text object:\n" + err);
+    if (!t.trim()) {
+      setEditTool("select");
+      return;
     }
+    await commit(t);
   };
-  cancel.onclick = closeTextEditor;
-  save.onclick = () => { commit(); };
+
+  cancel.onclick = () => {
+    closeTextEditor();
+    setEditTool("select");
+  };
+  save.onclick = () => { apply(); };
   area.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       e.preventDefault();
       closeTextEditor();
+      setEditTool("select");
     } else if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      commit();
+      apply();
     }
   });
 
   row.append(cancel, save);
   editor.append(area, row);
-  editWrap.appendChild(editor);
+  block.wrap.appendChild(editor);
   activeEditor = editor;
   area.focus();
-  area.select();
+  if (options.select) area.select();
+}
+
+function beginTextEdit(block: EditBlock, o: be.EditObject) {
+  selected = { page: block.index, id: o.id };
+  drawAllObjects();
+  const [x0, y0, x1, y1] = o.bbox;
+  makeTextEditor(
+    block,
+    x0,
+    y0,
+    o.text ?? "",
+    "Edit text",
+    async (text) => {
+      if (text === (o.text ?? "")) return;
+      try {
+        await be.editSetText(block.index, o.id, text);
+        dirty = true;
+        await refreshBlock(block, true);
+        status("Text updated");
+      } catch (err) {
+        status("Edit failed: " + err);
+        window.alert("Could not edit this text object:\n" + err);
+      }
+    },
+    {
+      select: true,
+      width: (x1 - x0) * app.scale + 34,
+      height: (y1 - y0) * app.scale + 28,
+    },
+  );
   status("Editing text — Enter applies, Shift+Enter adds a line, Esc cancels");
 }
 
-async function addText(x: number, y: number) {
-  const t = window.prompt("New text:", "");
-  if (t) {
-    try {
-      await be.editInsertText(app.page, x, y, t, 16);
-      dirty = true;
-      await renderEditPage();
-    } catch (err) {
-      status("Insert failed: " + err);
-    }
-  }
-  editTool = "select";
-  emit("mode");
+function beginNewText(block: EditBlock, x: number, y: number) {
+  selected = null;
+  drawAllObjects();
+  makeTextEditor(
+    block,
+    x,
+    y,
+    "",
+    "New text",
+    async (text) => {
+      try {
+        await be.editInsertText(block.index, x, y, text, 16);
+        dirty = true;
+        setEditTool("select");
+        await refreshBlock(block, true);
+        status("Text inserted");
+      } catch (err) {
+        status("Insert failed: " + err);
+        window.alert("Could not insert text:\n" + err);
+      }
+    },
+  );
+  status("Type new text — Enter applies, Shift+Enter adds a line, Esc cancels");
 }
 
 export async function undoEdit() {
   try {
-    if (await be.editUndo()) { await renderEditPage(); status("Undo"); }
-    else status("Nothing to undo");
+    if (await be.editUndo()) {
+      invalidateAll();
+      renderVisibleEditPages();
+      status("Undo");
+    } else status("Nothing to undo");
   } catch (e) { status("Undo failed: " + e); }
 }
 
 export async function redoEdit() {
   try {
-    if (await be.editRedo()) { await renderEditPage(); status("Redo"); }
-    else status("Nothing to redo");
+    if (await be.editRedo()) {
+      invalidateAll();
+      renderVisibleEditPages();
+      status("Redo");
+    } else status("Nothing to redo");
   } catch (e) { status("Redo failed: " + e); }
+}
+
+function invalidateAll() {
+  for (const block of blocks) {
+    block.renderedScale = -1;
+    block.objects = [];
+  }
 }
 
 export function deselect() {
   closeTextEditor();
-  if (selected !== null) { selected = null; drawObjects(); emit("mode"); }
+  if (selected !== null) {
+    selected = null;
+    drawAllObjects();
+    emit("mode");
+  }
 }
 
 export async function deleteSelected() {
-  if (selected === null) return;
+  if (!selected) return;
+  const block = blocks[selected.page];
+  if (!block) return;
   try {
-    await be.editDelete(app.page, selected);
+    await be.editDelete(selected.page, selected.id);
     dirty = true;
     selected = null;
-    await renderEditPage();
+    await refreshBlock(block, true);
   } catch (err) {
     status("Delete failed: " + err);
   }
@@ -344,11 +546,12 @@ export async function deleteSelected() {
 
 export async function editText() {
   const o = selectedObject();
-  if (!o || o.kind !== "text") {
+  if (!o || o.kind !== "text" || !selected) {
     status("Select a text object first");
     return;
   }
-  beginTextEdit(o);
+  const block = blocks[selected.page];
+  if (block) beginTextEdit(block, o);
 }
 
 export async function saveEdited() {
