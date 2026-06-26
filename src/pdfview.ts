@@ -54,6 +54,7 @@ function attachWheel() {
 }
 
 function onScroll() {
+  if (app.mode === "edit") return; // Edit mode manages its own single-page view
   if (scrollScheduled) return;
   scrollScheduled = true;
   requestAnimationFrame(() => {
@@ -166,6 +167,7 @@ export function renderPage() {
 // ------------------------------------------------------------- navigation
 export function gotoPage(n: number) {
   const clamped = Math.max(0, Math.min(n, app.pageCount - 1));
+  if (app.mode === "edit") { app.page = clamped; emit("page"); return; }
   const b = blocks[clamped];
   if (!b) return;
   app.page = clamped;
@@ -177,6 +179,7 @@ export function gotoPage(n: number) {
 export function setZoom(s: number) {
   const anchorPage = app.page;
   app.scale = Math.max(0.25, Math.min(6, s));
+  if (app.mode === "edit") { emit("page"); return; } // Edit mode re-renders its own page
   for (const b of blocks) layoutBlock(b);
   // keep the page you were on in view
   const b = blocks[anchorPage];

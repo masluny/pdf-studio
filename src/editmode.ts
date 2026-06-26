@@ -18,6 +18,7 @@ let selected: number | null = null;
 let editTool: "select" | "text" = "select";
 let dirty = false;
 let activeEditor: HTMLDivElement | null = null;
+let lastEditPage = -1;
 
 // drag state
 let dragging = false;
@@ -38,14 +39,26 @@ export function initEditMode(viewer: HTMLElement) {
   viewerEl.appendChild(editWrap);
   attachPointer();
 
-  on("page", () => { if (app.mode === "edit") renderEditPage(); });
+  // Re-render only on page/zoom changes (page nav, zoom). Scrolling no longer
+  // emits "page" while in edit mode, so this won't fire on scroll.
+  on("page", async () => {
+    if (app.mode !== "edit") return;
+    const changed = app.page !== lastEditPage;
+    await renderEditPage();
+    if (changed) { lastEditPage = app.page; viewerEl.scrollTop = 0; }
+  });
 }
 
 export function selectedObject(): be.EditObject | null {
   return objects.find((o) => o.id === selected) ?? null;
 }
 export function isDirty() { return dirty; }
-export function setEditTool(t: "select" | "text") { editTool = t; }
+export function currentEditTool(): "select" | "text" { return editTool; }
+export function setEditTool(t: "select" | "text") {
+  editTool = t;
+  drawObjects();
+  emit("mode");
+}
 
 export async function enterEdit(): Promise<boolean> {
   if (!app.pdfPath || !isTauri()) {
@@ -61,9 +74,13 @@ export async function enterEdit(): Promise<boolean> {
   }
   dirty = false;
   selected = null;
+  editTool = "select";
   setVisible(false);
   editWrap.style.display = "block";
   await renderEditPage();
+  lastEditPage = app.page;
+  viewerEl.scrollTop = 0;
+  emit("mode");
   status("Edit mode — double-click text to retype, drag to move, Delete to remove");
   return true;
 }

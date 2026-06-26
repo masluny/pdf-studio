@@ -1,5 +1,9 @@
 {
   "bundle": {
-    "resources": ["libpdfium.dylib"]
+    "resources": ["libpdfium.dylib"],
+    "macOS": {
+      "signingIdentity": "-",
+      "hardenedRuntime": false
+    }
   }
 }

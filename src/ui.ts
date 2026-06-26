@@ -17,7 +17,7 @@ import * as edit from "./editor";
 import {
   initEditMode, enterEdit, leaveEdit, setEditTool, editText,
   deleteSelected as editDeleteSelected, saveEdited, isDirty, selectedObject,
-  undoEdit, redoEdit, deselect as editDeselect,
+  undoEdit, redoEdit, deselect as editDeselect, currentEditTool,
 } from "./editmode";
 import { startupFile } from "./backend";
 
@@ -69,6 +69,19 @@ let findCount!: HTMLElement;
 let docControls: HTMLElement[] = [];
 let editInfoEl!: HTMLElement;
 const modeBtns: { view?: HTMLElement; edit?: HTMLElement } = {};
+const editToolBtns: { select?: HTMLElement; text?: HTMLElement } = {};
+
+function setEditToolUI(t: "select" | "text") {
+  setEditTool(t);
+  editToolBtns.select?.classList.toggle("active", t === "select");
+  editToolBtns.text?.classList.toggle("active", t === "text");
+  status(t === "select" ? "Select / move tool" : "Add text — click on the page");
+}
+function syncEditToolUI() {
+  const t = currentEditTool();
+  editToolBtns.select?.classList.toggle("active", t === "select");
+  editToolBtns.text?.classList.toggle("active", t === "text");
+}
 
 export function buildUI() {
   const root = document.getElementById("app")!;
@@ -151,9 +164,12 @@ function buildHeader(): HTMLElement {
     b.title = title; b.onclick = fn;
     return b;
   };
+  editToolBtns.select = eb(icon("select"), "Select / move (drag, Delete to remove)", () => setEditToolUI("select"));
+  editToolBtns.text = eb(icon("text"), "Add text — click on the page", () => setEditToolUI("text"));
+  editToolBtns.select.classList.add("active");
   editSeg.append(
-    eb(icon("select"), "Select / move (drag, Delete to remove)", () => { setEditTool("select"); status("Select tool"); }),
-    eb(icon("text"), "Add text — click on the page", () => { setEditTool("text"); status("Click on the page to add text"); }),
+    editToolBtns.select,
+    editToolBtns.text,
     eb("Edit text", "Edit selected text object (or double-click)", () => editText()),
     eb(icon("trash"), "Delete selected object", () => editDeleteSelected()),
     eb("↶", "Undo  ·  ⌘Z", () => undoEdit()),
@@ -461,17 +477,20 @@ async function setMode(m: "view" | "edit") {
   if (!app.pdfPath) { status("Open a PDF first"); return; }
   if (m === "edit") {
     if (!isTauri()) { status("Editing requires the desktop app (PDFium engine)"); return; }
+    // Set the mode flag BEFORE entering so the view-mode scroll handler is
+    // already suppressed while Edit mode renders its single page.
+    app.mode = "edit";
     const ok = await enterEdit();
-    if (!ok) return;
+    if (!ok) { app.mode = "view"; return; }
   } else {
     if (isDirty() && !window.confirm("Discard unsaved content edits?")) return;
+    app.mode = "view";
     leaveEdit();
   }
-  app.mode = m;
-  modeBtns.view?.classList.toggle("active", m === "view");
-  modeBtns.edit?.classList.toggle("active", m === "edit");
-  document.querySelectorAll(".view-only").forEach((e) => e.classList.toggle("hidden", m === "edit"));
-  document.querySelectorAll(".edit-only").forEach((e) => e.classList.toggle("hidden", m !== "edit"));
+  modeBtns.view?.classList.toggle("active", app.mode === "view");
+  modeBtns.edit?.classList.toggle("active", app.mode === "edit");
+  document.querySelectorAll(".view-only").forEach((e) => e.classList.toggle("hidden", app.mode === "edit"));
+  document.querySelectorAll(".edit-only").forEach((e) => e.classList.toggle("hidden", app.mode !== "edit"));
   emit("mode");
 }
 function updateSwatch() { swatchEl.style.background = app.color; }
@@ -600,6 +619,7 @@ function wireEvents() {
     if (last) last.innerHTML = icon(app.theme === "dark" ? "sun" : "moon");
   });
   on("mode", () => {
+    syncEditToolUI();
     if (app.mode !== "edit") { editInfoEl.textContent = ""; return; }
     const o = selectedObject();
     editInfoEl.textContent = o
