@@ -58,8 +58,14 @@ def build_master(src_path, hue_shift=0.0):
                 mp[x, y] = 255
     if EDGE_ERODE:
         mask = mask.filter(ImageFilter.MinFilter(EDGE_ERODE * 2 + 1))
-    im.putalpha(mask)
-    tile = im.crop(im.getbbox())
+    # Black-out the RGB outside the mask so the white background can't bleed
+    # into the anti-aliased edge when the icon is downscaled (no bright halo /
+    # white spots); then take alpha from the mask.
+    rgb = Image.composite(im.convert("RGB"),
+                          Image.new("RGB", im.size, (0, 0, 0)), mask)
+    rgb.putalpha(mask)
+    im = rgb
+    tile = im.crop(mask.getbbox())
 
     if hue_shift:
         tile = recolor(tile, hue_shift)
@@ -76,21 +82,28 @@ def build_master(src_path, hue_shift=0.0):
 
 
 def recolor(img, hue_shift):
-    """Rotate hue of coloured pixels by hue_shift degrees; keep the dark tile."""
+    """Rotate hue of the bright blobs by hue_shift degrees, ramping the effect
+    smoothly with brightness so the dark tile gradient is left fully intact
+    (a hard cutoff seams the gradient; this blends instead)."""
     img = img.convert("RGBA")
     px = img.load()
     w, h = img.size
+    lo, hi = 0.32, 0.50          # below lo: tile (untouched); above hi: full recolor
+    sh = hue_shift / 360.0
     for y in range(h):
         for x in range(w):
             r, g, b, a = px[x, y]
             if a < 10:
                 continue
             hue, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
-            if v < 0.22 or s < 0.06:   # dark tile / near-gray: leave as-is
+            if v <= lo or s < 0.06:   # dark tile / near-gray: leave as-is
                 continue
-            hue = (hue + hue_shift / 360.0) % 1.0
-            nr, ng, nb = colorsys.hsv_to_rgb(hue, s, v)
-            px[x, y] = (int(nr * 255), int(ng * 255), int(nb * 255), a)
+            t = 1.0 if v >= hi else (v - lo) / (hi - lo)
+            nh = (hue + sh) % 1.0
+            nr, ng, nb = colorsys.hsv_to_rgb(nh, s, v)
+            px[x, y] = (int((r / 255 * (1 - t) + nr * t) * 255),
+                        int((g / 255 * (1 - t) + ng * t) * 255),
+                        int((b / 255 * (1 - t) + nb * t) * 255), a)
     return img
 
 
