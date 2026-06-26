@@ -1,5 +1,7 @@
 # PDF Studio - Tauri + Rust + Tailwind
 
+<img src="logo.png" width="128" height="128" alt="PDF Studio logo" align="right">
+
 A professional desktop **PDF editor & viewer**, rebuilt as a native
 [Tauri 2](https://tauri.app) app:
 
