@@ -111,6 +111,27 @@ export const editRenderPage = (page: number, scale: number) =>
   invoke<RenderResult>("edit_render_page", { page, scale });
 export const editSetText = (page: number, id: number, text: string) =>
   invoke("edit_set_text", { page, id, text });
+export interface StyleOpts {
+  size?: number;
+  color?: [number, number, number];
+  font?: string;
+}
+export const editSetStyle = (page: number, id: number, opts: StyleOpts) =>
+  invoke("edit_set_style", {
+    page,
+    id,
+    size: opts.size ?? null,
+    color: opts.color ?? null,
+    font: opts.font ?? null,
+  });
+export type DecorationKind = "underline" | "strike";
+export const editSetDecoration = (
+  page: number,
+  id: number,
+  kind: DecorationKind,
+  on: boolean,
+  color: [number, number, number],
+) => invoke("edit_set_decoration", { page, id, kind, on, color });
 export const editMove = (page: number, id: number, dx: number, dy: number) =>
   invoke("edit_move", { page, id, dx, dy });
 export const editSetBbox = (page: number, id: number, bbox: [number, number, number, number]) =>

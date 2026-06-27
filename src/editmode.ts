@@ -37,6 +37,12 @@ let startY = 0;
 let dragPage = -1;
 let dragId: number | null = null;
 
+// manual double-click tracking (pointerdown's `detail` and the native dblclick
+// event are unreliable under pointer capture on Windows, so we time it ourselves)
+let lastDownTime = 0;
+let lastDownId: number | null = null;
+let lastDownPage = -1;
+
 export function initEditMode(viewer: HTMLElement) {
   viewerEl = viewer;
   pagesEl = document.createElement("div");
@@ -289,22 +295,106 @@ function hit(block: EditBlock, x: number, y: number): be.EditObject | null {
   return null;
 }
 
+let editMenu: HTMLDivElement | null = null;
+function closeEditMenu() { editMenu?.remove(); editMenu = null; }
+
+function showEditMenu(
+  clientX: number,
+  clientY: number,
+  block: EditBlock,
+  o: be.EditObject | null,
+  pt: [number, number],
+) {
+  closeEditMenu();
+  const menu = document.createElement("div");
+  menu.className = "popover edit-context";
+  const item = (label: string, fn: () => void, danger = false) => {
+    const it = document.createElement("div");
+    it.className = "menu-item" + (danger ? " danger" : "");
+    it.textContent = label;
+    it.onclick = () => { closeEditMenu(); fn(); };
+    menu.appendChild(it);
+  };
+  const sep = () => menu.appendChild(document.createElement("div")).className = "menu-sep";
+
+  if (o) {
+    if (o.kind === "text") {
+      item("Edit text", () => beginTextEdit(block, o));
+      item("Underline", () => applyDecorationToSelection("underline", true));
+      item("Strikethrough", () => applyDecorationToSelection("strike", true));
+      sep();
+    }
+    item("Add text here", () => beginNewText(block, pt[0], pt[1]));
+    sep();
+    item("Delete", () => deleteSelected(), true);
+  } else {
+    item("Add text here", () => beginNewText(block, pt[0], pt[1]));
+  }
+
+  document.body.appendChild(menu);
+  // keep the menu on-screen
+  const r = menu.getBoundingClientRect();
+  const left = Math.min(clientX, window.innerWidth - r.width - 8);
+  const top = Math.min(clientY, window.innerHeight - r.height - 8);
+  menu.style.left = `${Math.max(4, left)}px`;
+  menu.style.top = `${Math.max(4, top)}px`;
+  editMenu = menu;
+  setTimeout(() =>
+    document.addEventListener("pointerdown", function close(ev) {
+      if (!menu.contains(ev.target as Node)) { closeEditMenu(); document.removeEventListener("pointerdown", close); }
+    }), 0);
+}
+
 function attachPointer(block: EditBlock) {
+  block.overlay.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    if (activeEditor) return;
+    const [x, y] = toPoint(e as unknown as PointerEvent, block);
+    const o = hit(block, x, y);
+    app.page = block.index;
+    selected = o ? { page: block.index, id: o.id } : null;
+    drawAllObjects();
+    emit("mode");
+    showEditMenu(e.clientX, e.clientY, block, o, [x, y]);
+  });
+
   block.overlay.addEventListener("pointerdown", (e) => {
+    closeEditMenu();
     if (activeEditor) return;
     block.overlay.setPointerCapture(e.pointerId);
     app.page = block.index;
     emit("page");
     const [x, y] = toPoint(e, block);
+    // Releasing capture lets the inline editor (created below) keep keyboard
+    // focus — otherwise the trailing pointerup is delivered to the captured
+    // overlay and focus falls back to <body>, instantly blurring the editor.
+    const releaseCapture = () => {
+      try { block.overlay.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    };
     if (editTool === "text") {
+      releaseCapture();
       beginNewText(block, x, y);
       return;
     }
     const h = hit(block, x, y);
+
+    // Detect a double-click on the same text object ourselves (cross-platform).
+    const now = Date.now();
+    const isDouble =
+      !!h &&
+      h.kind === "text" &&
+      h.id === lastDownId &&
+      block.index === lastDownPage &&
+      now - lastDownTime < 450;
+    lastDownTime = now;
+    lastDownId = h ? h.id : null;
+    lastDownPage = block.index;
+
     selected = h ? { page: block.index, id: h.id } : null;
     drawAllObjects();
     emit("mode");
-    if (h?.kind === "text" && e.detail >= 2) {
+    if (isDouble && h) {
+      releaseCapture();
       beginTextEdit(block, h);
       return;
     }
@@ -349,16 +439,6 @@ function attachPointer(block: EditBlock) {
       }
     }
   });
-
-  block.overlay.addEventListener("dblclick", (e) => {
-    const [x, y] = toPoint(e as unknown as PointerEvent, block);
-    const o = hit(block, x, y);
-    if (o && o.kind === "text") {
-      selected = { page: block.index, id: o.id };
-      drawAllObjects();
-      beginTextEdit(block, o);
-    }
-  });
 }
 
 async function refreshBlock(block: EditBlock, force = true) {
@@ -373,81 +453,78 @@ function closeTextEditor() {
   activeEditor = null;
 }
 
-function makeTextEditor(
+// In-place editor: a contentEditable laid directly over the text on the page
+// (no popup). `rect` and `fontSizePts` are in PDF points; we scale to pixels.
+function makeInlineEditor(
   block: EditBlock,
-  x: number,
-  y: number,
+  rect: { x: number; y: number; w: number; h: number },
   value: string,
-  title: string,
+  fontSizePts: number,
   commit: (text: string) => Promise<void>,
-  options: { select?: boolean; width?: number; height?: number } = {},
+  opts: { isNew?: boolean } = {},
 ) {
   closeTextEditor();
-  const editor = document.createElement("div");
-  editor.className = "edit-text-popover";
-  editor.style.left = `${Math.max(0, x * app.scale)}px`;
-  editor.style.top = `${Math.max(0, y * app.scale)}px`;
-  editor.style.width = `${Math.max(220, options.width ?? 260)}px`;
+  const s = app.scale;
+  const ed = document.createElement("div");
+  ed.className = "inline-text-editor";
+  ed.contentEditable = "true";
+  ed.spellcheck = false;
+  ed.textContent = value;
+  ed.style.left = `${Math.max(0, rect.x * s)}px`;
+  ed.style.top = `${Math.max(0, rect.y * s)}px`;
+  ed.style.minWidth = `${Math.max(8, rect.w * s)}px`;
+  ed.style.minHeight = `${Math.max(fontSizePts * s, rect.h * s)}px`;
+  ed.style.fontSize = `${Math.max(8, fontSizePts * s)}px`;
 
-  const area = document.createElement("textarea");
-  area.value = value;
-  area.placeholder = title;
-  area.spellcheck = false;
-  area.style.minHeight = `${Math.max(54, options.height ?? 68)}px`;
-
-  const row = document.createElement("div");
-  row.className = "row";
-  const cancel = document.createElement("button");
-  cancel.className = "ghost-sm";
-  cancel.textContent = "Cancel";
-  const save = document.createElement("button");
-  save.className = "ghost-sm";
-  save.textContent = "Apply";
-
-  const apply = async () => {
-    const t = area.value.trimEnd();
+  let done = false;
+  const finish = async (save: boolean) => {
+    if (done) return;
+    done = true;
+    const text = (ed.innerText ?? "").replace(/\n+$/, "");
     closeTextEditor();
-    if (!t.trim()) {
-      setEditTool("select");
+    if (!save) {
+      if (opts.isNew) setEditTool("select");
       return;
     }
-    await commit(t);
+    if (opts.isNew && !text.trim()) { setEditTool("select"); return; }
+    await commit(text);
   };
 
-  cancel.onclick = () => {
-    closeTextEditor();
-    setEditTool("select");
-  };
-  save.onclick = () => { apply(); };
-  area.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      closeTextEditor();
-      setEditTool("select");
-    } else if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      apply();
-    }
+  ed.addEventListener("keydown", (e) => {
+    e.stopPropagation(); // keep keys out of the global shortcut handler
+    if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); finish(true); }
   });
 
-  row.append(cancel, save);
-  editor.append(area, row);
-  block.wrap.appendChild(editor);
-  activeEditor = editor;
-  area.focus();
-  if (options.select) area.select();
+  block.wrap.appendChild(ed);
+  activeEditor = ed;
+
+  const focusEditor = () => {
+    if (done) return;
+    ed.focus();
+    const range = document.createRange();
+    range.selectNodeContents(ed);
+    if (opts.isNew) range.collapse(false); // caret at end for new text
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  };
+  focusEditor();
+  // Re-grab focus after the click/pointer sequence settles, then arm blur-commit
+  // (deferred so the trailing pointerup that opened us can't blur-close instantly).
+  setTimeout(focusEditor, 0);
+  setTimeout(() => { if (!done) ed.addEventListener("blur", () => finish(true)); }, 120);
 }
 
 function beginTextEdit(block: EditBlock, o: be.EditObject) {
   selected = { page: block.index, id: o.id };
   drawAllObjects();
   const [x0, y0, x1, y1] = o.bbox;
-  makeTextEditor(
+  makeInlineEditor(
     block,
-    x0,
-    y0,
+    { x: x0, y: y0, w: x1 - x0, h: y1 - y0 },
     o.text ?? "",
-    "Edit text",
+    o.font_size || (y1 - y0) || 12,
     async (text) => {
       if (text === (o.text ?? "")) return;
       try {
@@ -460,11 +537,6 @@ function beginTextEdit(block: EditBlock, o: be.EditObject) {
         window.alert("Could not edit this text object:\n" + err);
       }
     },
-    {
-      select: true,
-      width: (x1 - x0) * app.scale + 34,
-      height: (y1 - y0) * app.scale + 28,
-    },
   );
   status("Editing text — Enter applies, Shift+Enter adds a line, Esc cancels");
 }
@@ -472,15 +544,15 @@ function beginTextEdit(block: EditBlock, o: be.EditObject) {
 function beginNewText(block: EditBlock, x: number, y: number) {
   selected = null;
   drawAllObjects();
-  makeTextEditor(
+  const size = 16;
+  makeInlineEditor(
     block,
-    x,
-    y,
+    { x, y, w: 120, h: size },
     "",
-    "New text",
+    size,
     async (text) => {
       try {
-        await be.editInsertText(block.index, x, y, text, 16);
+        await be.editInsertText(block.index, x, y, text, size);
         dirty = true;
         setEditTool("select");
         await refreshBlock(block, true);
@@ -490,6 +562,7 @@ function beginNewText(block: EditBlock, x: number, y: number) {
         window.alert("Could not insert text:\n" + err);
       }
     },
+    { isNew: true },
   );
   status("Type new text — Enter applies, Shift+Enter adds a line, Esc cancels");
 }
@@ -552,6 +625,62 @@ export async function editText() {
   }
   const block = blocks[selected.page];
   if (block) beginTextEdit(block, o);
+}
+
+export async function applyStyleToSelection(opts: be.StyleOpts) {
+  if (!selected) { status("Select a text object first"); return; }
+  const block = blocks[selected.page];
+  const o = selectedObject();
+  if (!block || !o || o.kind !== "text") {
+    status("Select a text object first");
+    return;
+  }
+  const page = selected.page;
+  try {
+    await be.editSetStyle(page, selected.id, opts);
+    dirty = true;
+    block.renderedScale = -1;
+    await renderEditBlock(block, true);
+    // A font change recreates the object as the page's last object; reselect it
+    // so the properties bar keeps tracking the same text.
+    if (opts.font) {
+      selected = block.objects.length
+        ? { page, id: block.objects[block.objects.length - 1].id }
+        : null;
+    }
+    drawAllObjects();
+    emit("mode");
+    status("Style updated");
+  } catch (err) {
+    status("Style change failed: " + err);
+    window.alert("Could not change the text style:\n" + err);
+  }
+}
+
+export async function applyDecorationToSelection(
+  kind: be.DecorationKind,
+  on: boolean,
+  color: [number, number, number] = [0, 0, 0],
+) {
+  if (!selected) { status("Select a text object first"); return; }
+  const block = blocks[selected.page];
+  const o = selectedObject();
+  if (!block || !o || o.kind !== "text") {
+    status("Select a text object first");
+    return;
+  }
+  try {
+    await be.editSetDecoration(selected.page, selected.id, kind, on, color);
+    dirty = true;
+    block.renderedScale = -1;
+    await renderEditBlock(block, true);
+    drawAllObjects();
+    emit("mode");
+    status(`${kind === "strike" ? "Strikethrough" : "Underline"} ${on ? "added" : "removed"}`);
+  } catch (err) {
+    status("Decoration failed: " + err);
+    window.alert("Could not change the decoration:\n" + err);
+  }
 }
 
 export async function saveEdited() {

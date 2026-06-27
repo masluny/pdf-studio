@@ -1,0 +1,22 @@
+{
+  "version": 3,
+  "source": "sample.pdf",
+  "annotations": [
+    {
+      "id": "cefqkffsfq9j",
+      "page": 0,
+      "color": "#ff5252",
+      "kind": "rect",
+      "rect": [
+        46.987118720527064,
+        50.77422959542141,
+        432.10486018013853,
+        610.2487594770461
+      ],
+      "width": 2,
+      "fill": false
+    }
+  ],
+  "comments": {},
+  "notes": ""
+}

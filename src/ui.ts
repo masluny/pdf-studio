@@ -18,7 +18,9 @@ import {
   initEditMode, enterEdit, leaveEdit, setEditTool, editText,
   deleteSelected as editDeleteSelected, saveEdited, isDirty, selectedObject,
   undoEdit, redoEdit, deselect as editDeselect, currentEditTool,
+  applyStyleToSelection, applyDecorationToSelection,
 } from "./editmode";
+import { StyleOpts, DecorationKind } from "./backend";
 import { startupFile } from "./backend";
 
 const TOOLS: [Tool, string, string, string][] = [
@@ -70,6 +72,73 @@ let docControls: HTMLElement[] = [];
 let editInfoEl!: HTMLElement;
 const modeBtns: { view?: HTMLElement; edit?: HTMLElement } = {};
 const editToolBtns: { select?: HTMLElement; text?: HTMLElement } = {};
+let emptyStateEl: HTMLElement | null = null;
+let propsPanelEl: HTMLElement | null = null;
+let propsInfoEl: HTMLElement | null = null;
+const styleBar: {
+  family?: HTMLSelectElement;
+  size?: HTMLInputElement;
+  bold?: HTMLButtonElement;
+  italic?: HTMLButtonElement;
+  underline?: HTMLButtonElement;
+  strike?: HTMLButtonElement;
+  color?: HTMLInputElement;
+} = {};
+// local face state for the currently selected text object
+let styleBold = false;
+let styleItalic = false;
+let styleUnderline = false;
+let styleStrike = false;
+let lastStyledKey = "";
+
+function fontName(): string {
+  const fam = styleBar.family?.value || "helvetica";
+  const b = styleBold, i = styleItalic;
+  if (fam === "times") {
+    if (b && i) return "times_bold_italic";
+    if (b) return "times_bold";
+    if (i) return "times_italic";
+    return "times_roman";
+  }
+  const suffix = b && i ? "_bold_oblique" : b ? "_bold" : i ? "_oblique" : "";
+  return fam + suffix; // helvetica / courier + variant
+}
+function hexToRgb(hex: string): [number, number, number] {
+  const m = hex.replace("#", "");
+  return [
+    parseInt(m.slice(0, 2), 16),
+    parseInt(m.slice(2, 4), 16),
+    parseInt(m.slice(4, 6), 16),
+  ];
+}
+function applyStyle(opts: StyleOpts) { applyStyleToSelection(opts); }
+function currentTextColor(): [number, number, number] {
+  return styleBar.color ? hexToRgb(styleBar.color.value) : [0, 0, 0];
+}
+
+function syncPropsPanel() {
+  const o = app.mode === "edit" ? selectedObject() : null;
+  const isText = !!o && o.kind === "text";
+  // Show the panel only in edit mode with a text object selected.
+  document.querySelector(".body-grid")?.classList.toggle("props-open", isText);
+  if (!isText) return;
+
+  const key = `${app.page}:${o!.id}`;
+  if (key !== lastStyledKey) {
+    // selection changed — we can't read the existing face, so reset the toggles
+    lastStyledKey = key;
+    styleBold = styleItalic = styleUnderline = styleStrike = false;
+    styleBar.bold?.classList.remove("active");
+    styleBar.italic?.classList.remove("active");
+    styleBar.underline?.classList.remove("active");
+    styleBar.strike?.classList.remove("active");
+  }
+  if (styleBar.size && document.activeElement !== styleBar.size) {
+    styleBar.size.value = `${Math.max(1, Math.round(o!.font_size || 0))}`;
+  }
+  if (o!.color && styleBar.color) styleBar.color.value = o!.color;
+  if (propsInfoEl) propsInfoEl.textContent = `Text · ${Math.round(o!.font_size || 0)} pt`;
+}
 
 function setEditToolUI(t: "select" | "text") {
   setEditTool(t);
@@ -99,12 +168,15 @@ export function buildUI() {
   viewer.style.minHeight = "0";
   col.appendChild(viewer);
   body.appendChild(col);
+  body.appendChild(buildPropsPanel());
   grid.appendChild(body);
   grid.appendChild(buildStatus());
   root.appendChild(grid);
 
   mountViewer(viewer);
   initEditMode(viewer);
+  emptyStateEl = buildEmptyState();
+  viewer.appendChild(emptyStateEl);
   initTools();
   setTool("select");
   setEnabled(false);
@@ -122,7 +194,7 @@ function buildHeader(): HTMLElement {
   const save = iconBtn("save", "Save annotations  ·  ⌘S", () => { saveNow(); status("Annotations saved"); });
   bar.appendChild(save); docControls.push(save);
 
-  const exportBtn = h("button", "btn-primary", icon("export") + "<span>Export</span>") as HTMLButtonElement;
+  const exportBtn = h("button", "btn-primary view-only", icon("export") + "<span>Export</span>") as HTMLButtonElement;
   exportBtn.title = "Export PDF with marks baked in  ·  ⌘E";
   exportBtn.style.marginLeft = "2px";
   exportBtn.onclick = exportPdf;
@@ -176,9 +248,10 @@ function buildHeader(): HTMLElement {
     eb("↷", "Redo  ·  ⌘⇧Z", () => redoEdit()),
   );
   bar.appendChild(editSeg);
+
   editInfoEl = h("span", "pill edit-only hidden", "");
   bar.appendChild(editInfoEl);
-  const saveEditBtn = h("button", "btn-primary edit-only hidden", icon("save") + "<span>Save PDF</span>") as HTMLButtonElement;
+  const saveEditBtn = h("button", "btn-primary edit-only hidden", icon("save") + "<span>Save</span>") as HTMLButtonElement;
   saveEditBtn.style.marginLeft = "2px"; saveEditBtn.title = "Save the edited PDF";
   saveEditBtn.onclick = () => saveEdited();
   bar.appendChild(saveEditBtn);
@@ -219,6 +292,100 @@ function buildHeader(): HTMLElement {
   const find = iconBtn("search", "Find  ·  ⌘F", toggleFind); bar.appendChild(find); docControls.push(find);
   bar.appendChild(iconBtn(app.theme === "dark" ? "sun" : "moon", "Toggle light / dark  ·  ⌘L", toggleTheme));
   return bar;
+}
+
+// ------------------------------------------------------------------ empty state
+function buildEmptyState(): HTMLElement {
+  const wrap = h("div", "empty-state");
+  const card = h("div", "empty-card");
+  const art = h("div", "empty-art", icon("open"));
+  const title = h("div", "empty-title", "No PDF open");
+  const sub = h("div", "empty-sub", "Open a document to view, annotate and edit it.");
+  const btn = h("button", "btn-primary", icon("open") + "<span>Open file</span>") as HTMLButtonElement;
+  btn.style.marginTop = "16px"; btn.style.height = "40px"; btn.style.padding = "0 22px";
+  btn.onclick = openPdf;
+  const hint = h("div", "empty-hint", "or press  ⌘O");
+  card.append(art, title, sub, btn, hint);
+  wrap.appendChild(card);
+  return wrap;
+}
+function setEmptyState(visible: boolean) {
+  emptyStateEl?.classList.toggle("hidden", !visible);
+}
+
+// ------------------------------------------------------------------ text properties panel
+function buildPropsPanel(): HTMLElement {
+  const panel = h("div", "right-panel edit-only hidden");
+  panel.appendChild(h("div", "panel-head", "Text"));
+
+  const body = h("div", "panel-body");
+
+  // font family
+  body.appendChild(h("div", "field-label", "Font"));
+  const family = h("select", "field") as HTMLSelectElement;
+  family.style.width = "100%";
+  for (const [val, label] of [["helvetica", "Helvetica"], ["times", "Times"], ["courier", "Courier"]]) {
+    const opt = document.createElement("option"); opt.value = val; opt.textContent = label; family.appendChild(opt);
+  }
+  family.onchange = () => applyStyle({ font: fontName() });
+  styleBar.family = family;
+  body.appendChild(family);
+
+  // size + style toggles row
+  body.appendChild(h("div", "field-label", "Size & style"));
+  const row = h("div", "panel-row");
+  const size = h("input", "field") as HTMLInputElement;
+  size.type = "number"; size.min = "4"; size.max = "300"; size.step = "1";
+  size.value = "12"; size.style.width = "62px"; size.title = "Font size (pt)";
+  size.onchange = () => { const v = parseFloat(size.value); if (v > 0) applyStyle({ size: v }); };
+  styleBar.size = size;
+
+  const seg = h("div", "segment");
+  const toggle = (
+    label: string, title: string, css: Partial<CSSStyleDeclaration>,
+    get: () => boolean, set: (v: boolean) => void, fire: (on: boolean) => void,
+  ): HTMLButtonElement => {
+    const b = h("button", "seg-btn", label) as HTMLButtonElement;
+    Object.assign(b.style, css); b.title = title;
+    b.onclick = () => { const nv = !get(); set(nv); b.classList.toggle("active", nv); fire(nv); };
+    seg.appendChild(b);
+    return b;
+  };
+  styleBar.bold = toggle("B", "Bold", { fontWeight: "800" },
+    () => styleBold, (v) => (styleBold = v), () => applyStyle({ font: fontName() }));
+  styleBar.italic = toggle("I", "Italic (kursywa)", { fontStyle: "italic", fontWeight: "700" },
+    () => styleItalic, (v) => (styleItalic = v), () => applyStyle({ font: fontName() }));
+  styleBar.underline = toggle("U", "Underline (podkreślenie)", { textDecoration: "underline", fontWeight: "700" },
+    () => styleUnderline, (v) => (styleUnderline = v),
+    (on) => applyDecorationToSelection("underline" as DecorationKind, on, currentTextColor()));
+  styleBar.strike = toggle("S", "Strikethrough", { textDecoration: "line-through", fontWeight: "700" },
+    () => styleStrike, (v) => (styleStrike = v),
+    (on) => applyDecorationToSelection("strike" as DecorationKind, on, currentTextColor()));
+
+  row.append(size, seg);
+  body.appendChild(row);
+
+  // colour
+  body.appendChild(h("div", "field-label", "Colour"));
+  const colorRow = h("div", "panel-row");
+  const color = h("input", "") as HTMLInputElement;
+  color.type = "color"; color.value = "#000000";
+  color.className = "panel-color"; color.title = "Text colour";
+  color.onchange = () => applyStyle({ color: hexToRgb(color.value) });
+  styleBar.color = color;
+  const colorHint = h("span", "field-hint", "applies to text");
+  colorRow.append(color, colorHint);
+  body.appendChild(colorRow);
+
+  propsInfoEl = h("div", "panel-info", "");
+  body.appendChild(propsInfoEl);
+
+  const tip = h("div", "panel-tip", "Double-click text on the page to retype it inline.");
+  body.appendChild(tip);
+
+  panel.appendChild(body);
+  propsPanelEl = panel;
+  return panel;
 }
 
 // ------------------------------------------------------------------ sidebar
@@ -353,6 +520,7 @@ async function openPdf() {
 function forceViewMode() {
   if (app.mode === "edit") leaveEdit();
   app.mode = "view";
+  document.querySelector(".body-grid")?.classList.remove("props-open");
   modeBtns.view?.classList.add("active");
   modeBtns.edit?.classList.remove("active");
   document.querySelectorAll(".view-only").forEach((e) => e.classList.remove("hidden"));
@@ -372,6 +540,7 @@ export async function openPath(path: string) {
     notesArea.value = app.notes;
     pageInput.value = "1"; pageTotal.textContent = `/ ${app.pageCount}`;
     setEnabled(true);
+    setEmptyState(false);
     fitWidth();
     refreshThumbs(); refreshOutline(); refreshComments();
     status(`Opened ${path.split("/").pop()}  ·  ${app.pageCount} pages  ·  ${app.annotations.length} mark(s)`);
@@ -620,6 +789,7 @@ function wireEvents() {
   });
   on("mode", () => {
     syncEditToolUI();
+    syncPropsPanel();
     if (app.mode !== "edit") { editInfoEl.textContent = ""; return; }
     const o = selectedObject();
     editInfoEl.textContent = o
@@ -632,7 +802,7 @@ function wireShortcuts() {
   window.addEventListener("keydown", (e) => {
     const meta = e.metaKey || e.ctrlKey;
     const target = e.target as HTMLElement;
-    const typing = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA");
+    const typing = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
     if (meta && e.key === "o") { e.preventDefault(); openPdf(); }
     else if (meta && e.key === "s") { e.preventDefault(); saveNow(); status("Saved"); }
     else if (meta && e.key === "e") { e.preventDefault(); exportPdf(); }

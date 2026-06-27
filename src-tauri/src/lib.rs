@@ -269,6 +269,34 @@ fn edit_set_text(
 }
 
 #[tauri::command]
+fn edit_set_style(
+    app: tauri::AppHandle,
+    state: tauri::State<EditState>,
+    page: u16,
+    id: u32,
+    size: Option<f32>,
+    color: Option<[u8; 3]>,
+    font: Option<String>,
+) -> Result<(), String> {
+    let bytes = state.bytes.lock().unwrap().clone();
+    apply(&state, pdf_edit::set_style(pdfium(&app)?, &bytes, page, id, size, color, font))
+}
+
+#[tauri::command]
+fn edit_set_decoration(
+    app: tauri::AppHandle,
+    state: tauri::State<EditState>,
+    page: u16,
+    id: u32,
+    kind: String,
+    on: bool,
+    color: [u8; 3],
+) -> Result<(), String> {
+    let bytes = state.bytes.lock().unwrap().clone();
+    apply(&state, pdf_edit::set_decoration(pdfium(&app)?, &bytes, page, id, &kind, on, color))
+}
+
+#[tauri::command]
 fn edit_move(
     app: tauri::AppHandle,
     state: tauri::State<EditState>,
@@ -352,6 +380,8 @@ pub fn run() {
             edit_objects,
             edit_render_page,
             edit_set_text,
+            edit_set_style,
+            edit_set_decoration,
             edit_move,
             edit_set_bbox,
             edit_delete,

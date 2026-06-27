@@ -111,7 +111,181 @@ pub fn set_text(
     doc.save_to_bytes().map_err(e2s)
 }
 
+/// Map a font name to one of PDFium's 14 standard fonts.
+fn font_token(doc: &mut PdfDocument, name: &str) -> PdfFontToken {
+    let f = doc.fonts_mut();
+    match name {
+        "helvetica_bold" => f.helvetica_bold(),
+        "helvetica_oblique" | "helvetica_italic" => f.helvetica_oblique(),
+        "helvetica_bold_oblique" | "helvetica_bold_italic" => f.helvetica_bold_oblique(),
+        "times_roman" | "times" => f.times_roman(),
+        "times_bold" => f.times_bold(),
+        "times_italic" => f.times_italic(),
+        "times_bold_italic" => f.times_bold_italic(),
+        "courier" => f.courier(),
+        "courier_bold" => f.courier_bold(),
+        "courier_oblique" | "courier_italic" => f.courier_oblique(),
+        "courier_bold_oblique" | "courier_bold_italic" => f.courier_bold_oblique(),
+        _ => f.helvetica(),
+    }
+}
+
+/// Change a text object's font size, colour and/or font face.
+///
+/// - `size`: new absolute font size in points (scales the object in place,
+///   preserving the existing font face).
+/// - `color`: new fill (text) colour as [r, g, b].
+/// - `font`: a standard-font name (e.g. "helvetica_bold"). Because PDFium 0.9.2
+///   has no font setter for existing text, changing the face **recreates** the
+///   object with the chosen standard font at the same baseline — so the
+///   recreated object becomes the page's last object (caller should reselect).
+pub fn set_style(
+    pdfium: &Pdfium,
+    bytes: &[u8],
+    page_index: u16,
+    id: u32,
+    size: Option<f32>,
+    color: Option<[u8; 3]>,
+    font: Option<String>,
+) -> Result<Vec<u8>, String> {
+    let mut doc = pdfium.load_pdf_from_byte_slice(bytes, None).map_err(e2s)?;
+
+    // Read current text-object properties first (immutable borrow released here).
+    let (cur_text, cur_size, left, bottom) = {
+        let page = doc.pages().get(page_index as i32).map_err(e2s)?;
+        let obj = page.objects().get(id as usize).map_err(e2s)?;
+        let t = obj
+            .as_text_object()
+            .ok_or_else(|| "object is not text".to_string())?;
+        let b = obj.bounds().map_err(e2s)?;
+        (t.text(), t.scaled_font_size().value, b.left().value, b.bottom().value)
+    };
+
+    if let Some(fname) = font.as_deref() {
+        // Recreate with a standard font at the same baseline.
+        let new_size = size.unwrap_or(cur_size).max(1.0);
+        let token = font_token(&mut doc, fname);
+        let mut page = doc.pages().get(page_index as i32).map_err(e2s)?;
+        let removed = page.objects_mut().remove_object_at_index(id as usize).map_err(e2s)?;
+        std::mem::forget(removed); // see delete_object: avoid double-free SIGSEGV
+        let mut newobj = page
+            .objects_mut()
+            .create_text_object(
+                PdfPoints::new(left),
+                PdfPoints::new(bottom),
+                &cur_text,
+                token,
+                PdfPoints::new(new_size),
+            )
+            .map_err(e2s)?;
+        if let Some(c) = color {
+            newobj.set_fill_color(PdfColor::new(c[0], c[1], c[2], 255)).map_err(e2s)?;
+        }
+        page.regenerate_content().map_err(e2s)?;
+        return doc.save_to_bytes().map_err(e2s);
+    }
+
+    // No font change: scale for size, set fill colour — both in place.
+    let mut page = doc.pages().get(page_index as i32).map_err(e2s)?;
+    {
+        let mut obj = page.objects().get(id as usize).map_err(e2s)?;
+        if let Some(ns) = size {
+            let f = (ns / cur_size.max(0.1)).max(0.01);
+            if (f - 1.0).abs() > 0.001 {
+                obj.translate(PdfPoints::new(-left), PdfPoints::new(-bottom)).map_err(e2s)?;
+                obj.scale(f, f).map_err(e2s)?;
+                obj.translate(PdfPoints::new(left), PdfPoints::new(bottom)).map_err(e2s)?;
+            }
+        }
+        if let Some(c) = color {
+            obj.set_fill_color(PdfColor::new(c[0], c[1], c[2], 255)).map_err(e2s)?;
+        }
+    }
+    page.regenerate_content().map_err(e2s)?;
+    doc.save_to_bytes().map_err(e2s)
+}
+
+/// Add or remove an underline / strikethrough line for a text object.
+///
+/// PDF text has no native decoration, so these are drawn as thin horizontal line
+/// path objects. Toggling **off** is best-effort: it removes the first thin,
+/// horizontal line found in the decoration zone of the text. The line does not
+/// track the text if the text is later moved.
+pub fn set_decoration(
+    pdfium: &Pdfium,
+    bytes: &[u8],
+    page_index: u16,
+    id: u32,
+    kind: &str,
+    on: bool,
+    color: [u8; 3],
+) -> Result<Vec<u8>, String> {
+    let doc = pdfium.load_pdf_from_byte_slice(bytes, None).map_err(e2s)?;
+    let mut page = doc.pages().get(page_index as i32).map_err(e2s)?;
+
+    // Text bounds in PDF (bottom-left origin) coords.
+    let (left, right, top, bottom) = {
+        let obj = page.objects().get(id as usize).map_err(e2s)?;
+        if obj.object_type() != PdfPageObjectType::Text {
+            return Err("object is not text".to_string());
+        }
+        let b = obj.bounds().map_err(e2s)?;
+        (b.left().value, b.right().value, b.top().value, b.bottom().value)
+    };
+    let size = (top - bottom).abs().max(1.0);
+    let target_y = match kind {
+        "strike" => (top + bottom) / 2.0,
+        _ /* underline */ => bottom - 1.0,
+    };
+
+    if on {
+        let width = (size / 15.0).max(0.6);
+        page.objects_mut()
+            .create_path_object_line(
+                PdfPoints::new(left),
+                PdfPoints::new(target_y),
+                PdfPoints::new(right),
+                PdfPoints::new(target_y),
+                PdfColor::new(color[0], color[1], color[2], 255),
+                PdfPoints::new(width),
+            )
+            .map_err(e2s)?;
+    } else {
+        // Find a thin, horizontal path line in the decoration zone and drop it.
+        let text_w = (right - left).abs().max(1.0);
+        let mut hit: Option<usize> = None;
+        for (i, obj) in page.objects().iter().enumerate() {
+            if obj.object_type() != PdfPageObjectType::Path {
+                continue;
+            }
+            let b = match obj.bounds() {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let lh = (b.top().value - b.bottom().value).abs();
+            let lw = (b.right().value - b.left().value).abs();
+            let ly = (b.top().value + b.bottom().value) / 2.0;
+            let overlaps_x = b.left().value < right && b.right().value > left;
+            let near_y = (ly - target_y).abs() < size * 0.35 + 1.5;
+            if lh < 2.5 && lw >= text_w * 0.4 && overlaps_x && near_y {
+                hit = Some(i);
+                break;
+            }
+        }
+        if let Some(i) = hit {
+            let removed = page.objects_mut().remove_object_at_index(i).map_err(e2s)?;
+            std::mem::forget(removed); // see delete_object: avoid double-free SIGSEGV
+        }
+    }
+
+    page.regenerate_content().map_err(e2s)?;
+    doc.save_to_bytes().map_err(e2s)
+}
+
 /// Translate an object by (dx, dy) given in top-left points (dy positive = down).
+///
+/// When the moved object is text, any underline / strikethrough lines drawn in
+/// its decoration zone are translated by the same delta so they follow the text.
 pub fn move_object(
     pdfium: &Pdfium,
     bytes: &[u8],
@@ -122,8 +296,36 @@ pub fn move_object(
 ) -> Result<Vec<u8>, String> {
     let doc = pdfium.load_pdf_from_byte_slice(bytes, None).map_err(e2s)?;
     let mut page = doc.pages().get(page_index as i32).map_err(e2s)?;
+
+    // Collect the target plus any decoration lines that ride with it.
+    let mut move_ids: Vec<usize> = vec![id as usize];
     {
-        let mut obj = page.objects().get(id as usize).map_err(e2s)?;
+        let target = page.objects().get(id as usize).map_err(e2s)?;
+        if target.object_type() == PdfPageObjectType::Text {
+            let b = target.bounds().map_err(e2s)?;
+            let (left, right, top, bottom) =
+                (b.left().value, b.right().value, b.top().value, b.bottom().value);
+            let size = (top - bottom).abs().max(1.0);
+            let text_w = (right - left).abs().max(1.0);
+            for (i, o) in page.objects().iter().enumerate() {
+                if i == id as usize || o.object_type() != PdfPageObjectType::Path {
+                    continue;
+                }
+                let lb = match o.bounds() { Ok(b) => b, Err(_) => continue };
+                let lh = (lb.top().value - lb.bottom().value).abs();
+                let lw = (lb.right().value - lb.left().value).abs();
+                let ly = (lb.top().value + lb.bottom().value) / 2.0;
+                let overlaps_x = lb.left().value < right && lb.right().value > left;
+                let in_zone = ly >= bottom - size * 0.6 && ly <= top + 1.0;
+                if lh < 2.5 && lw >= text_w * 0.4 && overlaps_x && in_zone {
+                    move_ids.push(i);
+                }
+            }
+        }
+    }
+
+    for idx in move_ids {
+        let mut obj = page.objects().get(idx).map_err(e2s)?;
         obj.translate(PdfPoints::new(dx), PdfPoints::new(-dy_top)).map_err(e2s)?;
     }
     page.regenerate_content().map_err(e2s)?;
@@ -276,6 +478,87 @@ mod tests {
         let (png, _w, _h) = render_page_png(&pdfium, &disk, 0, 1.6).unwrap();
         std::fs::write("/tmp/edit_proof.png", &png).unwrap();
         eprintln!("EDIT PROOF: wrote /tmp/edit_test_out.pdf and /tmp/edit_proof.png");
+    }
+
+    #[test]
+    fn style_size_color_font() {
+        let pdfium = bind(Path::new(".")).expect("bind pdfium");
+        let bytes = sample();
+
+        let objs = list_objects(&pdfium, &bytes, 0).unwrap();
+        let intro = objs
+            .iter()
+            .find(|o| o.text.as_deref().map(|t| t.contains("Introduction")).unwrap_or(false))
+            .expect("Introduction heading");
+        let id = intro.id;
+        let orig_size = intro.font_size.unwrap();
+        let orig_text = intro.text.clone().unwrap();
+
+        // Grow the font size ~2x via scaling; the object stays in place + same text.
+        let target = orig_size * 2.0;
+        let bigger = set_style(&pdfium, &bytes, 0, id, Some(target), None, None).unwrap();
+        let after = &list_objects(&pdfium, &bigger, 0).unwrap()[id as usize];
+        let new_size = after.font_size.unwrap();
+        assert!((new_size - target).abs() < 1.0, "size {new_size} not ~{target}");
+        assert_eq!(after.text.as_deref(), Some(orig_text.as_str()), "text changed on resize");
+
+        // Colour-only change must save and keep the object as text.
+        let recolored = set_style(&pdfium, &bytes, 0, id, None, Some([220, 30, 120]), None).unwrap();
+        assert!(!recolored.is_empty());
+
+        // Font change recreates the object as the page's last object with same text.
+        let bolded = set_style(&pdfium, &bytes, 0, id, None, None, Some("helvetica_bold".into())).unwrap();
+        let objs2 = list_objects(&pdfium, &bolded, 0).unwrap();
+        assert_eq!(objs2.len(), objs.len(), "object count should be unchanged after recreate");
+        let last = objs2.last().unwrap();
+        assert_eq!(last.text.as_deref(), Some(orig_text.as_str()), "recreated text mismatch");
+        eprintln!("STYLE OK: size {orig_size}->{new_size}, recolor+font recreate fine");
+    }
+
+    #[test]
+    fn decoration_underline_strike() {
+        let pdfium = bind(Path::new(".")).expect("bind pdfium");
+        let bytes = sample();
+        let objs = list_objects(&pdfium, &bytes, 0).unwrap();
+        let intro = objs
+            .iter()
+            .find(|o| o.text.as_deref().map(|t| t.contains("Introduction")).unwrap_or(false))
+            .expect("Introduction heading");
+        let id = intro.id;
+        let n0 = objs.len();
+
+        // Underline ON adds one path object.
+        let underlined = set_decoration(&pdfium, &bytes, 0, id, "underline", true, [0, 0, 0]).unwrap();
+        let n1 = list_objects(&pdfium, &underlined, 0).unwrap().len();
+        assert_eq!(n1, n0 + 1, "underline ON should add one object");
+
+        // Underline OFF removes it again.
+        let cleared = set_decoration(&pdfium, &underlined, 0, id, "underline", false, [0, 0, 0]).unwrap();
+        let n2 = list_objects(&pdfium, &cleared, 0).unwrap().len();
+        assert_eq!(n2, n0, "underline OFF should remove the line");
+
+        // Strikethrough ON also adds one object.
+        let struck = set_decoration(&pdfium, &bytes, 0, id, "strike", true, [200, 20, 20]).unwrap();
+        let n3 = list_objects(&pdfium, &struck, 0).unwrap().len();
+        assert_eq!(n3, n0 + 1, "strike ON should add one object");
+
+        // Moving the underlined text must drag the underline along with it.
+        let thin_line_y = |bytes: &[u8]| -> f32 {
+            list_objects(&pdfium, bytes, 0)
+                .unwrap()
+                .iter()
+                .filter(|o| o.kind == "path" && (o.bbox[3] - o.bbox[1]).abs() < 3.0)
+                .map(|o| o.bbox[1])
+                .fold(f32::MAX, f32::min)
+        };
+        let y_before = thin_line_y(&underlined);
+        let moved = move_object(&pdfium, &underlined, 0, id, 0.0, 30.0).unwrap();
+        let y_after = thin_line_y(&moved);
+        assert!(
+            (y_after - y_before - 30.0).abs() < 2.0,
+            "underline did not follow the moved text: {y_before} -> {y_after}"
+        );
+        eprintln!("DECORATION OK: underline +1/-1, strike +1, underline follows move");
     }
 
     #[test]
